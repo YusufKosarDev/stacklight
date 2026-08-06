@@ -1,0 +1,40 @@
+#!/bin/sh
+#
+# Stacklight commit-msg policy.
+#
+# 1. Reject any tooling/authorship attribution in commit messages.
+# 2. Require Conventional Commits subject lines.
+#
+# Enabled with:  git config core.hooksPath .githooks
+# CI re-runs the same checks so `--no-verify` cannot slip past silently.
+
+msg_file="$1"
+
+# Strip comment lines before checking, so the git template does not trip the rules.
+body=$(grep -v '^#' "$msg_file")
+
+attribution_re='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by)|written by[[:space:]]+(an?[[:space:]]+)?(assistant|model)|claude\.ai|anthropic|openai|yapay zeka|üretken zeka'
+
+if printf '%s' "$body" | grep -Eiq "$attribution_re"; then
+    echo "commit-msg: tooling/authorship attribution detected." >&2
+    echo "            Remove it from the message and commit again." >&2
+    exit 1
+fi
+
+# U+1F916 robot face, matched by codepoint so this file stays plain ASCII.
+if printf '%s' "$body" | grep -q "$(printf '\360\237\244\226')"; then
+    echo "commit-msg: attribution emoji detected. Remove it and commit again." >&2
+    exit 1
+fi
+
+subject=$(printf '%s' "$body" | sed -n '1p')
+
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|chore|docs|refactor|test|build|ci|perf|revert)(\([a-z0-9-]+\))?: .{1,64}$'; then
+    echo "commit-msg: subject must follow Conventional Commits." >&2
+    echo "            <type>(<scope>): <description>   (max 72 chars total)" >&2
+    echo "            types: feat fix chore docs refactor test build ci perf revert" >&2
+    echo "            got: $subject" >&2
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: stacklight-backend
+
+  datasource:
+    # Neon DIRECT endpoint (no "-pooler"): PgBouncer transaction pooling conflicts
+    # with the JDBC driver's server-side prepared statements.
+    hikari:
+      pool-name: stacklight-pool
+      maximum-pool-size: 3
+      # Neon Free bills compute by CU-hour and only suspends when no client is
+      # connected. The three settings below let the pool drain to zero so the
+      # database can actually scale to zero while this service is idle.
+      minimum-idle: 0
+      idle-timeout: 30000
+      keepalive-time: 0
+      max-lifetime: 600000
+      connection-timeout: 10000
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+  health:
+    # Deliberately off: /actuator/health is the uptime-ping target, and a DB
+    # check on every ping would keep the Neon compute awake around the clock.
+    db:
+      enabled: false
+
+stacklight:
+  ingest:
+    api-key: ${INGEST_API_KEY:}
+
+logging:
+  level:
+    root: INFO
+    dev.stacklight: INFO

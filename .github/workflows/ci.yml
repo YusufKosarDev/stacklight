@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The commit-msg hook enforces this locally; re-running it here means
+      # `--no-verify` cannot slip anything past unnoticed.
+      - name: Commit messages
+        run: |
+          pattern='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by)|claude\.ai|anthropic|openai'
+          if git log --format='%H %B' | grep -Eni "$pattern"; then
+            echo "::error::attribution found in commit history"
+            exit 1
+          fi
+          echo "commit history clean"
+
+      - name: Tracked files
+        run: |
+          pattern='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by)|claude\.ai|anthropic|openai'
+          if git grep -InEi "$pattern" -- . ':!.githooks/*' ':!.github/workflows/*'; then
+            echo "::error::attribution found in tracked files"
+            exit 1
+          fi
+          echo "tracked files clean"
+
+      - name: Secrets
+        run: |
+          # Password class excludes < and > so documented placeholders such as
+          # postgresql://<user>:<password>@<host> do not trip the check.
+          pattern='npg_[A-Za-z0-9]{12,}|postgres(ql)?://[A-Za-z0-9_.-]+:[A-Za-z0-9_%.-]{12,}@|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          if git grep -InE "$pattern" -- . ':!*.env.example' ':!.github/workflows/*'; then
+            echo "::error::credential-shaped string found in tracked files"
+            exit 1
+          fi
+          echo "no credentials in tree"
+
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Integration tests start a real PostgreSQL 17 via Testcontainers, using
+      # the Docker daemon the runner already provides.
+      - name: Build and test
+        working-directory: backend
+        run: ./mvnw -B --no-transfer-progress verify
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Render builds from this Dockerfile. Building it here turns a deploy-time
+      # failure into a pull-request failure.
+      - name: Build container image
+        working-directory: backend
+        run: docker build -t stacklight-backend:ci .
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+      # Runs without DATABASE_URL on purpose: the dashboard must never reach the
+      # database at build time.
+      - name: Build
+        working-directory: web
+        run: npm run build

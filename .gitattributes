@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+.githooks/* text eol=lf
+*.sh        text eol=lf
+mvnw        text eol=lf
+Dockerfile  text eol=lf
+
+mvnw.cmd    text eol=crlf
+*.cmd       text eol=crlf
+*.bat       text eol=crlf
+
+*.jar       binary
+*.png       binary
+*.ico       binary

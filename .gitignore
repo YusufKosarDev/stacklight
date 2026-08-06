@@ -1,0 +1,35 @@
+# --- secrets -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- java / maven --------------------------------------------------------
+target/
+!**/src/main/**/target/
+!**/src/test/**/target/
+*.class
+
+# --- node / next ---------------------------------------------------------
+node_modules/
+.next/
+out/
+build/
+!**/src/main/**/build/
+next-env.d.ts
+*.tsbuildinfo
+
+# --- tooling -------------------------------------------------------------
+.vercel
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.classpath
+.project
+.settings/
+.DS_Store
+Thumbs.db
+npm-debug.log*
