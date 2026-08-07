@@ -2,6 +2,8 @@
 
 Error ingestion and triage for small services.
 
+**Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
+
 **Status: step 0.** This commit proves the deployment pipeline end to end and
 nothing more. There is no fingerprinting, grouping, deduplication, time series
 or alerting yet — those land in later steps, on top of a chain that is already
@@ -146,10 +148,45 @@ Render sets `PORT` itself, and the application reads it.
 
 Filled in once both services are live.
 
+Measured against the live deployment on 7 August 2026. Ingestion on Render
+(Frankfurt, free), dashboard on Vercel (`fra1`), database on Neon
+(`eu-central-1`).
+
 | Check | Result |
 |---|---|
-| `POST /api/events` writes a row | _pending_ |
-| Dashboard renders that row | _pending_ |
-| **Dashboard while ingestion is asleep** | _pending_ |
-| Dashboard response time | _pending_ |
-| Ingestion cold start | _pending_ |
+| `POST /api/events` writes a row | 202, `stored: true` — 3 rows in Neon |
+| Request without the shared secret | 401 |
+| Same `event_id` sent twice | 202 `stored: true`, then 202 `stored: false`; one row |
+| Dashboard renders those rows | all 3 events listed |
+| **Dashboard while ingestion is asleep** | **200 in 0.34 s, full data** |
+| Dashboard response time | 0.29–0.50 s warm, 1.6–2.1 s on a cold function |
+| Neon query time from `fra1` | 8–12 ms |
+| Ingestion cold start | **95 s and 114 s**, measured twice |
+| Ingestion when warm | 0.19–0.26 s |
+| `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
+
+### The claim, and the control that backs it
+
+The dashboard measurement above was taken 19 minutes after the last request to
+the ingestion service. To confirm the service was genuinely asleep rather than
+merely idle, the next request after that measurement was timed: it took
+**114 seconds**. So during the same window in which the ingestion service could
+not answer at all, the dashboard served complete data in a third of a second.
+
+That is the architectural bet, tested rather than asserted.
+
+### Two findings worth carrying forward
+
+**Cold starts are worse than the platform documents.** Render describes roughly
+a minute; the two measurements here were 95 and 114 seconds. The first of them
+returned **503** rather than waiting — the platform gave up before the service
+finished starting.
+
+This decides the shape of the client library in a later step. A caller must
+never block on this endpoint, and a single failed attempt cannot be treated as a
+lost event: the SDK needs an async bounded queue with retry and backoff, and the
+first delivery after an idle period should be expected to fail.
+
+**The two halves fail independently.** Nothing above required the ingestion
+service to be reachable for the dashboard to work, or the reverse. That is the
+property the rest of the project is built on.
