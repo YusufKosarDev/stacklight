@@ -12,11 +12,18 @@ import { neon } from "@neondatabase/serverless";
  * Built lazily so `next build` succeeds without DATABASE_URL present.
  */
 export function sql() {
-  const url = process.env.DATABASE_URL;
+  const raw = process.env.DATABASE_URL;
 
-  if (!url) {
+  if (!raw) {
     throw new Error("DATABASE_URL is not set");
   }
+
+  // Strip a leading byte order mark and surrounding whitespace. Neither is ever
+  // meaningful in a connection string, but both survive a trip through the
+  // tooling that writes environment variables, and a smuggled BOM makes the
+  // driver reject an otherwise correct URL.
+  const BOM = "\uFEFF";
+  const url = (raw.startsWith(BOM) ? raw.slice(BOM.length) : raw).trim();
 
   return neon(url);
 }

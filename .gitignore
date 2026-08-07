@@ -33,3 +33,6 @@ next-env.d.ts
 .DS_Store
 Thumbs.db
 npm-debug.log*
+
+.vercel
+.env*
