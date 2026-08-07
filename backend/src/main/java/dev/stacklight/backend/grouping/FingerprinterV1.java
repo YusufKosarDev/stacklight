@@ -1,0 +1,207 @@
+package dev.stacklight.backend.grouping;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import org.springframework.stereotype.Component;
+
+/**
+ * First grouping algorithm.
+ *
+ * <p>Builds the fingerprint from the service, the exception type and the signatures of
+ * the in-app frames. Three properties are deliberate:
+ *
+ * <ul>
+ *   <li><b>Line numbers are excluded.</b> Editing a line above the throw site must not
+ *       open a new group.
+ *   <li><b>The message is excluded whenever frames are available.</b> Messages carry
+ *       values, and runtimes reword them between releases; the same fault would otherwise
+ *       scatter across many groups. When there are no frames the message is all there is,
+ *       and it is used in normalized form.
+ *   <li><b>Only in-app frames count.</b> The same application bug reaches the runtime
+ *       through different framework paths depending on the request; grouping on vendor
+ *       frames splits one fault into many.
+ * </ul>
+ */
+@Component
+public class FingerprinterV1 implements Fingerprinter {
+
+    public static final int VERSION = 1;
+
+    /** Frames beyond this depth add noise rather than identity. */
+    private static final int MAX_FRAMES = 8;
+
+    /** Below this many in-app frames, the minification heuristic is not reliable. */
+    private static final int MIN_FRAMES_FOR_MINIFICATION_CHECK = 3;
+
+    private static final double MINIFIED_SHARE = 0.6;
+
+    private final List<StackTraceParser> parsers;
+    private final MessageNormalizer messageNormalizer;
+
+    FingerprinterV1(List<StackTraceParser> parsers, MessageNormalizer messageNormalizer) {
+        this.parsers = parsers;
+        this.messageNormalizer = messageNormalizer;
+    }
+
+    @Override
+    public int version() {
+        return VERSION;
+    }
+
+    @Override
+    public Fingerprint compute(GroupingInput input) {
+        Platform platform = resolvePlatform(input);
+        List<Frame> frames = parseFrames(platform, input.stacktrace());
+
+        List<Frame> inApp = frames.stream().filter(Frame::inApp).toList();
+        String normalizedMessage = messageNormalizer.normalize(input.message());
+        String type = normalizeType(input.exceptionType());
+
+        String degradedReason = null;
+        List<Frame> selected;
+
+        if (frames.isEmpty()) {
+            degradedReason = Fingerprint.NO_FRAMES;
+            selected = List.of();
+        } else if (inApp.isEmpty()) {
+            degradedReason = Fingerprint.NO_IN_APP_FRAMES;
+            selected = frames;
+        } else if (looksMinified(inApp)) {
+            degradedReason = Fingerprint.MINIFIED;
+            selected = List.of();
+        } else {
+            selected = inApp;
+        }
+
+        List<String> lines = new ArrayList<>();
+        lines.add("v" + VERSION);
+        lines.add("platform=" + platform.wireName());
+        lines.add("service=" + input.service());
+        lines.add("type=" + type);
+
+        if (selected.isEmpty()) {
+            // Nothing trustworthy in the frames: the normalized message is the identity.
+            lines.add("message=" + normalizedMessage);
+        } else {
+            selected.stream()
+                    .limit(MAX_FRAMES)
+                    .forEach(frame -> lines.add("frame=" + frame.signature()));
+        }
+
+        if (degradedReason != null) {
+            lines.add("degraded=" + degradedReason);
+        }
+
+        String fingerprintInput = String.join("\n", lines);
+
+        return new Fingerprint(
+                hash(fingerprintInput),
+                VERSION,
+                fingerprintInput,
+                buildTitle(type, normalizedMessage),
+                buildCulprit(inApp, frames),
+                degradedReason,
+                platform,
+                frames);
+    }
+
+    private Platform resolvePlatform(GroupingInput input) {
+        if (input.declaredPlatform() != null && input.declaredPlatform() != Platform.UNKNOWN) {
+            return input.declaredPlatform();
+        }
+
+        Platform best = Platform.UNKNOWN;
+        int bestScore = 0;
+        for (StackTraceParser parser : parsers) {
+            int score = parser.confidence(input.stacktrace());
+            if (score > bestScore) {
+                bestScore = score;
+                best = parser.platform();
+            }
+        }
+        return best;
+    }
+
+    private List<Frame> parseFrames(Platform platform, String stacktrace) {
+        if (stacktrace == null || stacktrace.isBlank() || platform == Platform.UNKNOWN) {
+            return List.of();
+        }
+        return parsers.stream()
+                .filter(parser -> parser.platform() == platform)
+                .findFirst()
+                .map(parser -> parser.parse(stacktrace))
+                .orElseGet(List::of);
+    }
+
+    /**
+     * Detects frames whose names were generated by a minifier.
+     *
+     * <p>Minified identifiers are reassigned on every build, so a fingerprint built from
+     * them opens a fresh group on each deploy. Recognising the situation and falling back
+     * to the message produces coarser groups, which is worse than accurate grouping but
+     * far better than a group per release.
+     */
+    private static boolean looksMinified(List<Frame> inApp) {
+        if (inApp.stream().anyMatch(frame -> frame.file() != null && frame.file().contains(".min."))) {
+            return true;
+        }
+        if (inApp.size() < MIN_FRAMES_FOR_MINIFICATION_CHECK) {
+            return false;
+        }
+
+        long shortNames =
+                inApp.stream()
+                        .map(Frame::function)
+                        .filter(name -> name != null && name.length() <= 2)
+                        .count();
+        return (double) shortNames / inApp.size() >= MINIFIED_SHARE;
+    }
+
+    /** Drops the anonymous-class and lambda suffixes the compiler appends to a type. */
+    private static String normalizeType(String exceptionType) {
+        if (exceptionType == null || exceptionType.isBlank()) {
+            return "<unknown>";
+        }
+        return exceptionType.strip().replaceAll("\\$\\$Lambda.*$", "").replaceAll("\\$\\d+$", "");
+    }
+
+    private static String buildTitle(String type, String normalizedMessage) {
+        String simpleType = type;
+        int lastDot = type.lastIndexOf('.');
+        if (lastDot >= 0 && lastDot < type.length() - 1) {
+            simpleType = type.substring(lastDot + 1);
+        }
+
+        String title =
+                normalizedMessage.isBlank() ? simpleType : simpleType + ": " + normalizedMessage;
+        return title.length() <= 200 ? title : title.substring(0, 199) + "…";
+    }
+
+    private static String buildCulprit(List<Frame> inApp, List<Frame> all) {
+        if (!inApp.isEmpty()) {
+            return inApp.get(0).signature();
+        }
+        if (!all.isEmpty()) {
+            return all.get(0).signature();
+        }
+        return null;
+    }
+
+    /** SHA-256 truncated to 128 bits, which is far past the point of collisions here. */
+    private static String hash(String input) {
+        try {
+            byte[] digest =
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(input.getBytes(StandardCharsets.UTF_8));
+            byte[] truncated = new byte[16];
+            System.arraycopy(digest, 0, truncated, 0, 16);
+            return HexFormat.of().formatHex(truncated);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required but unavailable", e);
+        }
+    }
+}

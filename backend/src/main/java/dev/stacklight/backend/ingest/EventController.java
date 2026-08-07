@@ -16,26 +16,37 @@ public class EventController {
 
     private static final Logger log = LoggerFactory.getLogger(EventController.class);
 
-    private final EventStore store;
+    private final IngestService ingestService;
 
-    EventController(EventStore store) {
-        this.store = store;
+    EventController(IngestService ingestService) {
+        this.ingestService = ingestService;
     }
 
     @PostMapping
     public ResponseEntity<IngestResponse> ingest(@Valid @RequestBody IngestRequest request) {
         UUID eventId = request.eventId() != null ? request.eventId() : UUID.randomUUID();
-        boolean stored = store.insert(eventId, request);
+        IngestService.Result result = ingestService.ingest(eventId, request);
 
         log.info(
-                "ingest event_id={} service={} level={} stored={}",
+                "ingest event_id={} service={} level={} stored={} fingerprint={} group={}",
                 eventId,
                 request.service(),
                 request.level(),
-                stored);
+                result.stored(),
+                result.fingerprint() == null ? "-" : result.fingerprint().hash(),
+                result.groupId() == null ? "-" : result.groupId());
 
-        return ResponseEntity.accepted().body(new IngestResponse(eventId, stored));
+        return ResponseEntity.accepted()
+                .body(
+                        new IngestResponse(
+                                eventId,
+                                result.stored(),
+                                result.fingerprint() == null ? null : result.fingerprint().hash(),
+                                result.groupId()));
     }
 
-    public record IngestResponse(UUID eventId, boolean stored) {}
+    /**
+     * @param fingerprint null when the event was a duplicate and no grouping was done
+     */
+    public record IngestResponse(UUID eventId, boolean stored, String fingerprint, Long groupId) {}
 }
