@@ -22,7 +22,10 @@ jobs:
       # `--no-verify` cannot slip anything past unnoticed.
       - name: Commit messages
         run: |
-          pattern='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by)|claude\.ai|anthropic|openai'
+          # "generated with/by" only counts when a tool name follows; unqualified it is
+          # ordinary technical English and flagging it teaches people to route around
+          # the check. Kept in step with .githooks/commit-msg.
+          pattern='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by).{0,40}(claude|copilot|cursor|codex|chatgpt|gemini|devin)|claude\.ai|anthropic|openai'
           if git log --format='%H %B' | grep -Eni "$pattern"; then
             echo "::error::attribution found in commit history"
             exit 1
@@ -31,7 +34,10 @@ jobs:
 
       - name: Tracked files
         run: |
-          pattern='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by)|claude\.ai|anthropic|openai'
+          # "generated with/by" only counts when a tool name follows; unqualified it is
+          # ordinary technical English and flagging it teaches people to route around
+          # the check. Kept in step with .githooks/commit-msg.
+          pattern='co-authored-by:[[:space:]]*(claude|copilot|cursor|codex|gpt|gemini|devin|bot)|generated (with|by).{0,40}(claude|copilot|cursor|codex|chatgpt|gemini|devin)|claude\.ai|anthropic|openai'
           if git grep -InEi "$pattern" -- . ':!.githooks/*' ':!.github/workflows/*'; then
             echo "::error::attribution found in tracked files"
             exit 1
