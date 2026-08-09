@@ -4,10 +4,138 @@ Error ingestion and triage for small services.
 
 **Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
 
-**Status: step 3.** Events are grouped into distinct faults, counted into an
+**Status: step 4.** Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
-otherwise take the project down, and watched by three detectors whose relative
-merits are measured rather than assumed. A client library lands in a later step.
+otherwise take the project down, watched by three detectors whose relative merits
+are measured rather than assumed, and delivered by clients written around a
+collector that sleeps.
+
+---
+
+## The clients
+
+Two of them — Java and Node — and the shape of both was decided by a measurement
+rather than a preference. From step 0:
+
+> The collector's cold start was measured at 95, 104, 104, 106 and 114 seconds.
+> On the 95-second measurement the platform returned **503** rather than holding
+> the connection open.
+
+Everything below follows from that. A client that waits on this endpoint is worse
+than no client at all, and a client that treats one failed attempt as a lost
+event throws away almost everything during a wake.
+
+### What both clients do
+
+| | |
+|---|---|
+| **Capture** | Enqueue and return. No connection is opened, none is waited for, nothing is thrown — the caller is usually already dealing with something that went wrong. Measured at **19.8 microseconds** per capture against a collector that does not answer. |
+| **Queue** | Bounded. The alternative is not "no loss", it is an application that runs out of heap because its error reporter would not let go of anything. |
+| **When full** | The **oldest** goes. The queue only fills when the collector is unreachable, so when it comes back, what is happening now is worth more than what was happening two minutes ago. |
+| **Every drop** | Counted and readable from the application. A reporter that quietly loses things is worse than one that says how many. |
+| **Timeouts** | Short — 3 s connect, 5 s request. The first attempt against a sleeping collector is *supposed* to fail. |
+| **Retries** | Exponential backoff with **full jitter**, capped at 30 s. Failed batches go back to the front of the queue rather than being counted as sent. |
+| **Rejections** | A 401 does not become a 200 by being retried. Those batches are discarded and the reason is kept, instead of blocking the queue for ever. |
+| **Shutdown** | Bounded flush. The events worth having most are the ones still in memory when a process dies. |
+| **Its own failures** | Silent unless `debug` is on. A library whose job is to report errors must not become a source of them. |
+| **Dependencies** | **None.** Every jar or package a reporter drags in is a version it can conflict with, inside an application that did not ask for it. |
+
+### Why the drop policy is what it is
+
+Dropping the oldest means the first occurrence of an incident is the first to go,
+and that is the diagnostic one. It is accepted because the collector groups by
+fingerprint: a later event of the same fault opens the same group, so losing the
+earliest copy costs a count and a timestamp. Dropping the *newest* instead would
+mean that during a sustained burst nothing recent ever gets through, which is
+worse in the case that actually matters.
+
+### Stack traces are sent exactly as the runtime printed them
+
+The Java client sends `printStackTrace` output; the Node client sends
+`error.stack`. Neither reformats anything, because the collector's parsers were
+written against those formats in step 1 — tidying them here would mean two
+formats to keep in step instead of one.
+
+That compatibility is a test rather than an assumption. Samples captured from a
+running JVM and from Node live in the collector's suite, and they assert the
+frames come out right, the vendor split is right, and a redeploy that shifts line
+numbers keeps the same group.
+
+### Java
+
+Two artifacts. `stacklight-client` has no compile dependencies and works from
+plain Java; `stacklight-spring` is a thin starter on top.
+
+```java
+StacklightClient client = StacklightClient.start(new StacklightOptions()
+        .endpoint("https://collector.example.com/api/events")
+        .apiKey(System.getenv("STACKLIGHT_KEY"))
+        .service("checkout-api")
+        .release("1.4.0"));
+
+client.capture(exception);
+```
+
+With the starter, two properties and nothing else:
+
+```yaml
+stacklight:
+  endpoint: ${STACKLIGHT_ENDPOINT:}
+  api-key: ${STACKLIGHT_KEY:}
+```
+
+Exceptions reaching a controller are reported through a `HandlerExceptionResolver`
+that **always returns null**, rather than a `@ControllerAdvice`. An advice would
+have to either handle the exception, taking over the application's error
+responses, or rethrow it, changing where it surfaces. Returning null means "not
+handled": it sees everything and changes nothing. Verified live — the demo's
+failing endpoint still returns the application's own 500.
+
+The uncaught-exception handler delegates to whatever was installed before it,
+because a process-wide handler is something that belonged to the application.
+
+### Node
+
+Node only. The browser is deliberately out of scope: the collector authenticates
+with a shared secret in a header, and putting that in browser JavaScript publishes
+it — anyone could then fill the database, which on this plan suspends the project.
+Supporting browsers needs a public-key model with per-origin limits, which is its
+own piece of work rather than a flag on this one.
+
+```js
+const stacklight = StacklightClient.start({
+  endpoint: process.env.STACKLIGHT_ENDPOINT,
+  apiKey: process.env.STACKLIGHT_KEY,
+  service: "checkout-api",
+});
+
+stacklight.captureException(error);
+```
+
+`uncaughtException` needs care and gets it. Registering a listener suppresses
+Node's default behaviour of printing the error and exiting, so a reporter that
+merely listened would silently turn a crash into a hang. The handler restores it
+when nothing else has claimed it: if this client is the only listener, it flushes
+and then exits with the code Node would have used.
+
+### Running the examples
+
+```bash
+# Java
+cd sdk/java && ./mvnw install
+cd examples/java-demo && ./mvnw package
+STACKLIGHT_ENDPOINT=... STACKLIGHT_KEY=... java -jar target/java-demo-0.1.0.jar
+curl localhost:8081/boom
+
+# Node
+STACKLIGHT_ENDPOINT=... STACKLIGHT_KEY=... node examples/node-demo/demo.js
+node examples/node-demo/overflow.js     # drop policy, no collector needed
+```
+
+Neither client is published to Maven Central or npm, and that is a decision rather
+than an omission. Publishing means a namespace, signing keys and an account per
+registry, none of which changes whether the code is any good; the repository and
+`mvn install` are enough for what this is.
 
 ---
 

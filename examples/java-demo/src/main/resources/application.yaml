@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: java-demo
+
+server:
+  port: 8081
+
+# With no endpoint and key the client is inert and the application still runs, so this
+# file works unchanged on a machine that has never heard of a collector.
+stacklight:
+  endpoint: ${STACKLIGHT_ENDPOINT:}
+  api-key: ${STACKLIGHT_KEY:}
+  release: ${RELEASE:java-demo-1.0.0}
+  debug: true

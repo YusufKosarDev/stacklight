@@ -1,0 +1,21 @@
+{
+  "name": "@stacklight/client",
+  "version": "0.1.0",
+  "description": "Error reporting client for Node, with no dependencies",
+  "license": "MIT",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "error-tracking",
+    "observability"
+  ]
+}
