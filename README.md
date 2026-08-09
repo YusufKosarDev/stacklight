@@ -587,6 +587,41 @@ Measured against the live deployment on 7 August 2026. Ingestion on Render
 (Frankfurt, free), dashboard on Vercel (`fra1`), database on Neon
 (`eu-central-1`).
 
+### The clients, against the live collector
+
+| Check | Result |
+|---|---|
+| 5,000 captures against a collector that does not answer | 98.9 ms total, **19.8 µs per capture**, nothing thrown |
+| Queue at capacity during that burst | held at exactly 25, never grew |
+| Accounting after 5,000 captures | `accepted = sent + dropped + queued`, exactly |
+| **Cold start: capture while the collector is asleep** | **9 failed attempts over 114 s, 0 events lost, all delivered** |
+| Backoff between those attempts | 6 s, 6 s, 6 s, 14 s, 18 s, 12 s… growing and jittered |
+| Java: exception out of a controller | reported, request still returned the application's own 500 in **57 ms** |
+| Java: manual capture | reported, `sent=2 dropped=0 failedAttempts=0` |
+| Grouping of what the clients sent | `demo.js#resolveUser` and `CheckoutController$CartService#total`, neither degraded |
+| In-app split, Node demo | 4 application frames, 6 `node:internal` frames |
+| Shutdown flush with an unreachable collector | bounded, process exited |
+
+The cold-start row is the one the clients exist for. The collector had been idle
+for nineteen minutes; the application captured two errors and carried on
+immediately, the client spent 114 seconds failing at it, and then delivered both.
+Nothing was lost, and nothing about those 114 seconds was visible to the code
+that reported the errors.
+
+That 114 seconds is also the top of the range measured in step 0 — the clients
+were built against 95 to 114 seconds and met the worst of it.
+
+### One thing this found
+
+The shutdown flush was bounded by its timeout **plus** one request timeout, not
+by its timeout: an attempt starting just inside the deadline ran its own full
+five seconds past it, so a three-second promise was really eight. It showed up as
+a demo run whose "3 s" flush took 5,023 ms.
+
+The fix is that a flush attempt is now given only the time that is left. The
+original tests missed it because their fake transport answered instantly; there
+are now tests with a slow one, in both clients.
+
 ### Detection, on the live deployment
 
 | Check | Result |
