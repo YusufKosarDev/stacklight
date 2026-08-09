@@ -700,14 +700,14 @@ running for a scheduler to fire into.
 |---|---|
 | `POST /api/events` writes a row | 202, `stored: true` |
 | Request without the shared secret | 401 |
-| Dashboard renders groups | 5 groups, with sparklines and storage status |
-| **Dashboard while ingestion is asleep** | **200 in 0.37 s, full data** |
-| Group list, with 24-hour sparklines per group | 0.37–0.45 s warm |
+| Dashboard renders groups | 9 groups, with sparklines and storage status |
+| **Dashboard while ingestion is asleep** | **200 in 0.40 s, full data** |
+| Group list, with 24-hour sparklines per group | 0.40–0.58 s warm |
 | Group detail, trend + similarity + frame breakdown | 0.36–0.52 s across all three ranges |
-| Alerts and detector scorecard pages | 0.31–0.36 s |
-| First request after a fully idle period | 1.8–2.2 s (see below) |
+| Alerts and detector scorecard pages | 0.31–0.72 s |
+| First request after a fully idle period | 1.8–3.3 s (see below) |
 | Neon query time from `fra1` | 6–16 ms |
-| Ingestion cold start | **95 s, 104 s, 104 s, 106 s, 114 s**, measured five times |
+| Ingestion cold start | **95, 104, 104, 104, 106, 114, 116 s**, measured seven times |
 | Ingestion when warm | 0.19–0.26 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
 
@@ -722,11 +722,17 @@ that is supposed to be optional, so the claim is measured again rather than
 inherited.
 
 To confirm the service was genuinely asleep rather than merely idle, the next
-request after the measurement was timed: **106 seconds**. So during the same
-window in which the ingestion service could not answer at all, the dashboard
-served everything — group list, sparklines, storage status, trend charts, frame
-breakdown, fingerprint input, similar groups, alerts and the detector
-scorecard — in under half a second.
+request after the measurement was timed. The two are seven seconds apart:
+
+```
+22:41:10   dashboard   200 in 0.40 s — 9 groups, charts, alerts, scorecard
+22:41:17   ingestion   200 in 104.2 s
+```
+
+So during the same window in which the ingestion service could not answer at all,
+the dashboard served everything — group list, sparklines, storage status, trend
+charts, frame breakdown, fingerprint input, similar groups, alerts and the
+detector scorecard — in under half a second.
 
 That is the architectural bet, tested rather than asserted. A static check backs
 the measurement: nothing under `web/` imports a HTTP client or names the
