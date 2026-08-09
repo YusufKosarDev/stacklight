@@ -1,5 +1,6 @@
 package dev.stacklight.backend.retention;
 
+import dev.stacklight.backend.detection.SelfScoringService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -24,10 +25,15 @@ public class RetentionStartupSweep {
     private static final Logger log = LoggerFactory.getLogger(RetentionStartupSweep.class);
 
     private final RetentionService retentionService;
+    private final SelfScoringService selfScoringService;
     private final TaskExecutor taskExecutor;
 
-    RetentionStartupSweep(RetentionService retentionService, TaskExecutor taskExecutor) {
+    RetentionStartupSweep(
+            RetentionService retentionService,
+            SelfScoringService selfScoringService,
+            TaskExecutor taskExecutor) {
         this.retentionService = retentionService;
+        this.selfScoringService = selfScoringService;
         this.taskExecutor = taskExecutor;
     }
 
@@ -37,6 +43,12 @@ public class RetentionStartupSweep {
                 () -> {
                     long deleted = retentionService.sweep("startup");
                     log.info("startup retention sweep deleted={}", deleted);
+
+                    // Verdicts made just before the instance went to sleep are the ones
+                    // most likely to have aged past their scoring window while nothing
+                    // was running. Waking is the first chance to settle them.
+                    int scored = selfScoringService.score();
+                    log.info("startup self-scoring pass scored={}", scored);
                 });
     }
 }

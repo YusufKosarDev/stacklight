@@ -60,6 +60,50 @@ stacklight:
     sweep-every-events: 200
     sweep-every-minutes: 10
 
+  detection:
+    # Every detector runs on every bucket; only this one may raise an alert. The others
+    # are shadows, and the scorecard is what decides whether this stays the choice.
+    active: ${DETECTOR_ACTIVE:poisson}
+    history-hours: 24
+    min-history-hours: 6
+    # The number that makes this domain different. 97% of group-hour buckets are empty,
+    # so a baseline near zero makes any non-zero hour look infinitely unusual. Nothing
+    # below this count is treated as a spike by any detector, whatever its score says.
+    min-observed: 5
+    ewma-alpha: 0.3
+    ewma-multiplier: 3.0
+    z-threshold: 3.0
+    z-sigma-floor: 1.0
+    poisson-probability: 0.001
+    poisson-lambda-floor: 0.1
+    new-group-window-hours: 2
+    new-group-threshold: 10
+    cooldown-minutes: 60
+    score-after-hours: 3
+    oracle-multiplier: 4.0
+
+  alerting:
+    # Blank turns delivery off without turning detection off: alerts are still found and
+    # still recorded, they are just marked disabled rather than queued.
+    to: ${ALERT_EMAIL_TO:}
+    from: ${ALERT_EMAIL_FROM:}
+    dashboard-url: ${DASHBOARD_URL:}
+    max-attempts: 5
+    drain-batch: 20
+
+spring.mail:
+  # Port 2525 rather than 587: Render blocks the usual submission port outbound.
+  host: ${MAIL_HOST:}
+  port: ${MAIL_PORT:2525}
+  username: ${MAIL_USERNAME:}
+  password: ${MAIL_PASSWORD:}
+  properties:
+    mail.smtp.auth: true
+    mail.smtp.starttls.enable: true
+    mail.smtp.connectiontimeout: 10000
+    mail.smtp.timeout: 10000
+    mail.smtp.writetimeout: 10000
+
 logging:
   level:
     root: INFO

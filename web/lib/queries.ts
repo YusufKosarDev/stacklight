@@ -195,6 +195,84 @@ export async function findSimilarGroups(
   `) as SimilarGroup[];
 }
 
+export type Alert = {
+  id: number;
+  group_id: number;
+  kind: "spike" | "new_group" | "regression";
+  detector: string | null;
+  observed: number | null;
+  baseline: number | null;
+  score: number | null;
+  title: string;
+  service: string;
+  created_at: string;
+  delivery_state: "pending" | "sent" | "failed" | "disabled";
+  delivery_attempts: number;
+  last_error: string | null;
+};
+
+export type DetectorRow = {
+  detector: string;
+  is_active: boolean;
+  fired: number;
+  judged: number;
+  pending: number;
+  tp: number;
+  fp: number;
+  fn: number;
+  tn: number;
+};
+
+export async function listAlerts(limit = 50): Promise<Alert[]> {
+  return (await sql()`
+    select a.id, a.group_id, a.kind, a.detector, a.observed, a.baseline, a.score,
+           a.title, a.delivery_state, a.delivery_attempts, a.last_error,
+           g.service,
+           to_char(a.created_at at time zone 'utc', ${UTC}) as created_at
+      from alerts a join event_groups g on g.id = a.group_id
+     order by a.created_at desc
+     limit ${limit}
+  `) as Alert[];
+}
+
+export async function listAlertsForGroup(groupId: number): Promise<Alert[]> {
+  return (await sql()`
+    select a.id, a.group_id, a.kind, a.detector, a.observed, a.baseline, a.score,
+           a.title, a.delivery_state, a.delivery_attempts, a.last_error,
+           g.service,
+           to_char(a.created_at at time zone 'utc', ${UTC}) as created_at
+      from alerts a join event_groups g on g.id = a.group_id
+     where a.group_id = ${groupId}
+     order by a.created_at desc
+     limit 10
+  `) as Alert[];
+}
+
+/**
+ * How each detector has actually done, on identical data.
+ *
+ * Every detector judged every bucket; only one was allowed to act. Because the
+ * verdicts of the others were recorded anyway, the comparison is a query rather than
+ * an argument. Nothing here is filtered, including the runs where a shadow beats the
+ * detector currently in charge.
+ */
+export async function getDetectorScorecard(): Promise<DetectorRow[]> {
+  return (await sql()`
+    select detector,
+           (array_agg(is_active order by created_at desc))[1]        as is_active,
+           count(*) filter (where fired)::int                        as fired,
+           count(*) filter (where outcome is not null)::int          as judged,
+           count(*) filter (where outcome is null)::int              as pending,
+           count(*) filter (where outcome = 'true_positive')::int    as tp,
+           count(*) filter (where outcome = 'false_positive')::int   as fp,
+           count(*) filter (where outcome = 'false_negative')::int   as fn,
+           count(*) filter (where outcome = 'true_negative')::int    as tn
+      from detector_observations
+     group by detector
+     order by detector
+  `) as DetectorRow[];
+}
+
 /**
  * What retention has been doing.
  *

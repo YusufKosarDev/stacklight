@@ -111,12 +111,26 @@ export default async function Page() {
             Errors grouped by fingerprint, newest first.
           </p>
         </div>
-        <Link
-          href="/how-grouping-works"
-          className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
-        >
-          How grouping works
-        </Link>
+        <nav className="flex flex-wrap gap-2">
+          <Link
+            href="/alerts"
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+          >
+            Alerts
+          </Link>
+          <Link
+            href="/detectors"
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+          >
+            Detectors
+          </Link>
+          <Link
+            href="/how-grouping-works"
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+          >
+            How grouping works
+          </Link>
+        </nav>
       </header>
 
       <section className="mb-8 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">

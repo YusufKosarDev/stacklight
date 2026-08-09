@@ -1,5 +1,9 @@
 package dev.stacklight.backend.ingest;
 
+import dev.stacklight.backend.alerting.AlertDispatcher;
+import dev.stacklight.backend.alerting.AlertService;
+import dev.stacklight.backend.detection.DetectionService;
+import dev.stacklight.backend.detection.SelfScoringService;
 import dev.stacklight.backend.grouping.Fingerprint;
 import dev.stacklight.backend.grouping.FingerprinterRegistry;
 import dev.stacklight.backend.grouping.GroupingInput;
@@ -29,6 +33,10 @@ public class IngestService {
     private final RollupStore rollupStore;
     private final FingerprinterRegistry fingerprinters;
     private final RetentionService retentionService;
+    private final DetectionService detectionService;
+    private final SelfScoringService selfScoringService;
+    private final AlertService alertService;
+    private final AlertDispatcher alertDispatcher;
     private final int hourlyCapPerGroup;
 
     IngestService(
@@ -37,12 +45,20 @@ public class IngestService {
             RollupStore rollupStore,
             FingerprinterRegistry fingerprinters,
             RetentionService retentionService,
+            DetectionService detectionService,
+            SelfScoringService selfScoringService,
+            AlertService alertService,
+            AlertDispatcher alertDispatcher,
             @Value("${stacklight.ingest.hourly-cap-per-group:200}") int hourlyCapPerGroup) {
         this.eventStore = eventStore;
         this.groupStore = groupStore;
         this.rollupStore = rollupStore;
         this.fingerprinters = fingerprinters;
         this.retentionService = retentionService;
+        this.detectionService = detectionService;
+        this.selfScoringService = selfScoringService;
+        this.alertService = alertService;
+        this.alertDispatcher = alertDispatcher;
         this.hourlyCapPerGroup = hourlyCapPerGroup;
     }
 
@@ -100,9 +116,22 @@ public class IngestService {
             groupStore.markSampled(filed.groupId());
         }
 
-        // Retention runs after the event is safely committed, never as part of it: a
-        // sweep that fails, or one that is slow, must not be able to reject an event.
-        afterCommit(retentionService::onEventStored);
+        // Detection is inside the transaction so an alert cannot outlive a rolled-back
+        // event, and so the row is durable before anyone tries to email it.
+        detectionService.evaluate(filed.groupId(), countThisHour);
+        if (filed.broughtItBack()) {
+            alertService.raiseRegression(filed.groupId());
+        }
+
+        // Everything below runs after the event is safely committed, never as part of
+        // it: a slow sweep, a scoring pass or an unreachable mail server must not be
+        // able to reject an event.
+        afterCommit(
+                () -> {
+                    retentionService.onEventStored();
+                    selfScoringService.scoreIfDue();
+                    alertDispatcher.requestDrain();
+                });
 
         return new Result(true, fingerprint, filed.groupId(), !withinCap, filed.broughtItBack());
     }
