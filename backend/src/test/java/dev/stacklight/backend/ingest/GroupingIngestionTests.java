@@ -58,6 +58,7 @@ class GroupingIngestionTests {
                 "java",
                 "java.lang.NullPointerException",
                 trace,
+                null,
                 null);
     }
 
@@ -161,7 +162,15 @@ class GroupingIngestionTests {
                         null,
                         Platform.JAVA,
                         v1.fingerprint().frames());
-        long newGroupId = groupStore.upsert(asVersionTwo, "checkout-api", "ERROR", "java.lang.NullPointerException");
+        long newGroupId =
+                groupStore
+                        .upsert(
+                                asVersionTwo,
+                                "checkout-api",
+                                "ERROR",
+                                "java.lang.NullPointerException",
+                                null)
+                        .groupId();
 
         assertThat(newGroupId).isNotEqualTo(v1.groupId());
         assertThat(groupCount()).isEqualTo(2);
@@ -237,7 +246,8 @@ class GroupingIngestionTests {
         ingestService.ingest(
                 UUID.randomUUID(),
                 new IngestRequest(
-                        null, "checkout-api", "WARN", "queue lag 4200", null, null, null, null));
+                        null, "checkout-api", "WARN", "queue lag 4200", null, null, null, null,
+                        null));
 
         assertThat(groupCount()).isEqualTo(1);
         assertThat(

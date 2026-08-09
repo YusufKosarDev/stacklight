@@ -28,13 +28,15 @@ public class EventController {
         IngestService.Result result = ingestService.ingest(eventId, request);
 
         log.info(
-                "ingest event_id={} service={} level={} stored={} fingerprint={} group={}",
+                "ingest event_id={} service={} level={} stored={} fingerprint={} group={} sampled={} regressed={}",
                 eventId,
                 request.service(),
                 request.level(),
                 result.stored(),
                 result.fingerprint() == null ? "-" : result.fingerprint().hash(),
-                result.groupId() == null ? "-" : result.groupId());
+                result.groupId() == null ? "-" : result.groupId(),
+                result.sampled(),
+                result.regressed());
 
         return ResponseEntity.accepted()
                 .body(
@@ -42,11 +44,21 @@ public class EventController {
                                 eventId,
                                 result.stored(),
                                 result.fingerprint() == null ? null : result.fingerprint().hash(),
-                                result.groupId()));
+                                result.groupId(),
+                                result.sampled(),
+                                result.regressed()));
     }
 
     /**
      * @param fingerprint null when the event was a duplicate and no grouping was done
+     * @param sampled the event was counted in the trend but its detail was not kept
+     * @param regressed this event brought a group back after it had been resolved
      */
-    public record IngestResponse(UUID eventId, boolean stored, String fingerprint, Long groupId) {}
+    public record IngestResponse(
+            UUID eventId,
+            boolean stored,
+            String fingerprint,
+            Long groupId,
+            boolean sampled,
+            boolean regressed) {}
 }

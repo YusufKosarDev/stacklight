@@ -1,9 +1,26 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getGroup, findSimilarGroups } from "@/lib/queries";
-import { levelStyle, relativeTime, DEGRADED_REASONS } from "@/lib/format";
+import {
+  getGroup,
+  findSimilarGroups,
+  getGroupSeries,
+  type Range,
+} from "@/lib/queries";
+import {
+  levelStyle,
+  statusStyle,
+  relativeTime,
+  DEGRADED_REASONS,
+} from "@/lib/format";
+import { TrendChart } from "@/app/components/charts";
 
 export const dynamic = "force-dynamic";
+
+const RANGES: { key: Range; label: string }[] = [
+  { key: "24h", label: "24 hours" },
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+];
 
 function frameLabel(frame: {
   declaringClass: string | null;
@@ -18,24 +35,36 @@ function frameLabel(frame: {
 
 export default async function GroupPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ range?: string }>;
 }) {
   const { id } = await params;
+  const { range: rawRange } = await searchParams;
   const groupId = Number(id);
 
   if (!Number.isInteger(groupId) || groupId <= 0) {
     notFound();
   }
 
+  const range: Range = RANGES.some((r) => r.key === rawRange)
+    ? (rawRange as Range)
+    : "24h";
+
   const group = await getGroup(groupId);
   if (!group) {
     notFound();
   }
 
-  const similar = await findSimilarGroups(group.id, group.title);
+  const [similar, series] = await Promise.all([
+    findSimilarGroups(group.id, group.title),
+    getGroupSeries(group.id, range),
+  ]);
+
   const frames = group.frames ?? [];
   const inAppCount = frames.filter((frame) => frame.inApp).length;
+  const status = statusStyle(group.status);
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-12">
@@ -55,9 +84,13 @@ export default async function GroupPage({
           >
             {group.level}
           </span>
-          <span className="font-mono text-xs text-zinc-400">
-            {group.service}
+          <span
+            className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono text-xs ring-1 ring-inset ${status.className}`}
+          >
+            <span aria-hidden>{status.icon}</span>
+            {status.label}
           </span>
+          <span className="font-mono text-xs text-zinc-400">{group.service}</span>
           <span className="text-xs text-zinc-500">{group.platform}</span>
         </div>
         <h1 className="mt-2 text-xl font-semibold tracking-tight text-zinc-100">
@@ -84,8 +117,46 @@ export default async function GroupPage({
               {group.last_seen} ({relativeTime(group.last_seen)})
             </dd>
           </div>
+          {(group.release_first || group.release_last) && (
+            <div>
+              <dt className="text-zinc-500">Releases</dt>
+              <dd className="font-mono text-zinc-200">
+                {group.release_first}
+                {group.release_last !== group.release_first
+                  ? ` → ${group.release_last}`
+                  : ""}
+              </dd>
+            </div>
+          )}
         </dl>
       </header>
+
+      {group.status === "regressed" && (
+        <p className="mb-8 rounded-lg border border-red-900/50 bg-red-950/25 px-4 py-3 text-sm text-red-200/90">
+          <span className="font-mono text-xs uppercase tracking-wider text-red-300/70">
+            regression
+          </span>
+          <br />
+          This group was resolved
+          {group.resolved_in_release ? ` in ${group.resolved_in_release}` : ""} and
+          came back
+          {group.regressed_in_release ? ` in ${group.regressed_in_release}` : ""}
+          {group.regressed_at ? `, ${relativeTime(group.regressed_at)}` : ""}. The
+          fix did not hold.
+        </p>
+      )}
+
+      {group.sampled_count > 0 && (
+        <p className="mb-8 rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3 text-sm text-amber-200/90">
+          <span className="font-mono text-xs uppercase tracking-wider text-amber-300/70">
+            sampled
+          </span>
+          <br />
+          {group.sampled_count} of these events were counted in the trend but their
+          detail was not stored: the group went over its hourly cap. The chart
+          below is complete; the stack traces behind part of it are not.
+        </p>
+      )}
 
       {group.degraded_reason && (
         <p className="mb-8 rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3 text-sm text-amber-200/90">
@@ -97,6 +168,30 @@ export default async function GroupPage({
             "Grouping used weaker signal than in-app frames."}
         </p>
       )}
+
+      <section className="mb-8 rounded-lg border border-zinc-800 bg-zinc-900/40 p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-zinc-400">
+            Frequency
+          </h2>
+          <div className="flex gap-1">
+            {RANGES.map((option) => (
+              <Link
+                key={option.key}
+                href={`/groups/${group.id}?range=${option.key}`}
+                className={`rounded px-2 py-1 font-mono text-xs transition-colors ${
+                  option.key === range
+                    ? "bg-zinc-700 text-zinc-100"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                {option.label}
+              </Link>
+            ))}
+          </div>
+        </div>
+        <TrendChart buckets={series} range={range} />
+      </section>
 
       <section className="mb-8">
         <h2 className="mb-1 text-sm font-medium uppercase tracking-wider text-zinc-400">
@@ -199,7 +294,7 @@ export default async function GroupPage({
       {group.sample_stacktrace && (
         <section className="mb-8">
           <h2 className="mb-1 text-sm font-medium uppercase tracking-wider text-zinc-400">
-            Latest event
+            Latest stored event
           </h2>
           <p className="mb-3 text-sm text-zinc-500">
             {group.sample_received_at} UTC &middot; {group.sample_message}

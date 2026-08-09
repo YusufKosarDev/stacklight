@@ -21,6 +21,49 @@ export const DEGRADED_REASONS: Record<string, string> = {
     "The frames look minified. Minified names change on every build, so grouping them would open a new group per deploy; the normalized message was used instead.",
 };
 
+/**
+ * Group state.
+ *
+ * `regressed` is deliberately the loudest: a group that came back after being called
+ * fixed is a worse signal than one nobody has looked at yet, and the icon carries the
+ * distinction so it never rests on colour alone.
+ */
+export const STATUS_STYLES: Record<
+  string,
+  { label: string; icon: string; className: string }
+> = {
+  open: {
+    label: "open",
+    icon: "●",
+    className: "bg-zinc-500/10 text-zinc-300 ring-zinc-500/30",
+  },
+  resolved: {
+    label: "resolved",
+    icon: "✓",
+    className: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30",
+  },
+  ignored: {
+    label: "ignored",
+    icon: "◌",
+    className: "bg-zinc-500/5 text-zinc-500 ring-zinc-600/30",
+  },
+  regressed: {
+    label: "regressed",
+    icon: "↺",
+    className: "bg-red-500/15 text-red-300 ring-red-500/40",
+  },
+};
+
+export function statusStyle(status: string) {
+  return STATUS_STYLES[status] ?? STATUS_STYLES.open;
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export function relativeTime(utcTimestamp: string): string {
   const then = new Date(utcTimestamp.replace(" ", "T") + "Z").getTime();
   const seconds = Math.round((Date.now() - then) / 1000);

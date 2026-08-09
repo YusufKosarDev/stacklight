@@ -4,31 +4,46 @@ import dev.stacklight.backend.grouping.Fingerprint;
 import dev.stacklight.backend.grouping.FingerprinterRegistry;
 import dev.stacklight.backend.grouping.GroupingInput;
 import dev.stacklight.backend.grouping.Platform;
+import dev.stacklight.backend.retention.RetentionService;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * Stores an event and files it into a group.
+ * Stores an event, files it into a group, and counts it into the hour.
  *
- * <p>Grouping runs inline rather than behind a queue. It is a few regular expressions and
- * a hash followed by one upsert, so the latency it adds is small next to the network call
- * that delivered the event, and doing it here means a group is visible the moment its
- * first event lands. A worker becomes worth its complexity when ingest volume outgrows a
- * single free instance, not before.
+ * <p>Grouping and rollup both run inline rather than behind a queue. They are a few
+ * regular expressions, a hash and two upserts, so the latency they add is small next to
+ * the network call that delivered the event, and a group and its trend are visible the
+ * moment the first event lands. A worker becomes worth its complexity when ingest volume
+ * outgrows a single free instance, not before.
  */
 @Service
 public class IngestService {
 
     private final EventStore eventStore;
     private final GroupStore groupStore;
+    private final RollupStore rollupStore;
     private final FingerprinterRegistry fingerprinters;
+    private final RetentionService retentionService;
+    private final int hourlyCapPerGroup;
 
     IngestService(
-            EventStore eventStore, GroupStore groupStore, FingerprinterRegistry fingerprinters) {
+            EventStore eventStore,
+            GroupStore groupStore,
+            RollupStore rollupStore,
+            FingerprinterRegistry fingerprinters,
+            RetentionService retentionService,
+            @Value("${stacklight.ingest.hourly-cap-per-group:200}") int hourlyCapPerGroup) {
         this.eventStore = eventStore;
         this.groupStore = groupStore;
+        this.rollupStore = rollupStore;
         this.fingerprinters = fingerprinters;
+        this.retentionService = retentionService;
+        this.hourlyCapPerGroup = hourlyCapPerGroup;
     }
 
     /**
@@ -36,8 +51,16 @@ public class IngestService {
      *
      * @param stored false when the event id had already been seen
      * @param fingerprint null when the event was a duplicate
+     * @param sampled true when the event was counted but its detail was not kept
+     * @param regressed true when this event brought a resolved group back
      */
-    public record Result(boolean stored, Fingerprint fingerprint, Long groupId) {}
+    public record Result(
+            boolean stored, Fingerprint fingerprint, Long groupId, boolean sampled, boolean regressed) {
+
+        static Result duplicate() {
+            return new Result(false, null, null, false, false);
+        }
+    }
 
     @Transactional
     public Result ingest(UUID eventId, IngestRequest request) {
@@ -53,22 +76,48 @@ public class IngestService {
                                         request.resolvedStacktrace()));
 
         // Order matters. The event is written first so that a repeated event_id is
-        // rejected by the unique constraint before the group counter is touched; doing
-        // the upsert first would inflate the count every time a client retried a delivery
-        // it had already made.
+        // rejected by the unique constraint before any counter is touched; doing the
+        // group or rollup upsert first would inflate both every time a client retried a
+        // delivery it had already made.
         boolean stored = eventStore.insert(eventId, request, fingerprint.platform().wireName());
         if (!stored) {
-            return new Result(false, null, null);
+            return Result.duplicate();
         }
 
-        long groupId =
+        GroupStore.Filed filed =
                 groupStore.upsert(
                         fingerprint,
                         request.service(),
                         request.level(),
-                        request.resolvedExceptionType());
-        eventStore.linkToGroup(eventId, groupId, fingerprint);
+                        request.resolvedExceptionType(),
+                        request.resolvedRelease());
 
-        return new Result(true, fingerprint, groupId);
+        int countThisHour = rollupStore.record(filed.groupId());
+        boolean withinCap = countThisHour <= hourlyCapPerGroup;
+
+        eventStore.attach(eventId, filed.groupId(), fingerprint, request, withinCap);
+        if (!withinCap) {
+            groupStore.markSampled(filed.groupId());
+        }
+
+        // Retention runs after the event is safely committed, never as part of it: a
+        // sweep that fails, or one that is slow, must not be able to reject an event.
+        afterCommit(retentionService::onEventStored);
+
+        return new Result(true, fingerprint, filed.groupId(), !withinCap, filed.broughtItBack());
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        action.run();
+                    }
+                });
     }
 }

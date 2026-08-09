@@ -33,6 +33,8 @@ public record IngestRequest(
 
         @Size(max = 20000) String stacktrace,
 
+        @Size(max = 100) String release,
+
         JsonNode payload) {
 
     /**
@@ -73,13 +75,27 @@ public record IngestRequest(
 
     /** Exception type, falling back to the legacy {@code payload.exceptionType} field. */
     public String resolvedExceptionType() {
-        if (exceptionType != null && !exceptionType.isBlank()) {
-            return exceptionType;
+        return firstNonBlank(exceptionType, "exceptionType");
+    }
+
+    /**
+     * Release the event came from.
+     *
+     * <p>Read from {@code payload.release} when not sent at the top level: that is where
+     * clients were putting it before regression detection gave it a column of its own.
+     */
+    public String resolvedRelease() {
+        return firstNonBlank(release, "release");
+    }
+
+    private String firstNonBlank(String topLevel, String payloadField) {
+        if (topLevel != null && !topLevel.isBlank()) {
+            return topLevel;
         }
         if (payload == null) {
             return null;
         }
-        JsonNode legacy = payload.get("exceptionType");
+        JsonNode legacy = payload.get(payloadField);
         return legacy != null && legacy.isString() ? legacy.stringValue() : null;
     }
 }

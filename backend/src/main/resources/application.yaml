@@ -42,6 +42,23 @@ management:
 stacklight:
   ingest:
     api-key: ${INGEST_API_KEY:}
+    # Beyond this many events per hour, a group keeps being counted but stops storing
+    # detail. The trend stays truthful while storage stops growing.
+    hourly-cap-per-group: 200
+
+  retention:
+    # Raw events only. Rollups are kept for good: they are the reason a trend still
+    # works after the events behind it are gone.
+    window-days: 14
+    # Neon Free suspends the project when storage runs out rather than billing for it,
+    # so the window tightens on its own as the events table approaches the limit.
+    warn-bytes: 314572800        # 300 MB
+    warn-window-days: 7
+    critical-bytes: 419430400    # 400 MB
+    critical-window-days: 3
+    batch-size: 5000
+    sweep-every-events: 200
+    sweep-every-minutes: 10
 
 logging:
   level:
