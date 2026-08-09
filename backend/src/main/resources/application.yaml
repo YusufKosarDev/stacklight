@@ -38,6 +38,13 @@ management:
     # check on every ping would keep the Neon compute awake around the clock.
     db:
       enabled: false
+    # Off for the stronger version of the same rule. Adding the mail starter brings
+    # an indicator that opens an SMTP connection on every health check, so with no
+    # mail configured the endpoint reports DOWN and the platform concludes the whole
+    # service is unhealthy -- over a feature that is optional by design. Liveness must
+    # not depend on anything outside this process.
+    mail:
+      enabled: false
 
 stacklight:
   ingest:
