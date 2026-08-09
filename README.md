@@ -4,8 +4,92 @@ Error ingestion and triage for small services.
 
 **Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
 
-**Status: step 1.** Events are grouped into distinct faults by a deterministic
-fingerprint. Time series, alerting and a client library land in later steps.
+**Status: step 2.** Events are grouped into distinct faults, counted into an
+hourly trend that outlives them, and kept inside a storage budget that would
+otherwise take the project down. Alerting and a client library land in later
+steps.
+
+---
+
+## Volume, and the limit that ends the project
+
+The free database plan does not bill for going over 512 MB. It suspends the
+project. So retention is not housekeeping here, it is the thing standing between
+this deployment and being switched off, and it has to work on an instance that
+sleeps after fifteen idle minutes.
+
+### Why there is no scheduler
+
+The obvious design is a nightly job. It does not work, and the failure is quiet:
+a timer firing into a process that is not running does not error, it simply does
+not happen. Storage grows, nothing complains, and the first symptom is a
+suspended database.
+
+The way out is an observation rather than a workaround:
+
+> **Storage only grows when events arrive, and events can only arrive while the
+> service is awake.**
+
+So retention does not need a clock. It needs to run in proportion to ingest —
+which is exactly the thing it is cleaning up after. Sweeps are triggered from
+the ingest path, amortised so that most events pay nothing, plus once at startup
+to clear whatever piled up during a long absence.
+
+Every pass is bounded to one batch, so falling behind costs more passes rather
+than one long one, and a sweep can never turn into a stall that outlives the
+request that triggered it.
+
+### Three defences, in order
+
+| Defence | What it does |
+|---|---|
+| **Retention window** | Raw events are deleted after 14 days. Rollups are kept for good. |
+| **Adaptive window** | Past 300 MB the window drops to 7 days, past 400 MB to 3. It widens again on its own once the pressure is gone. |
+| **Hourly cap** | Past 200 events an hour, a group keeps being counted but stops storing detail. |
+
+The cap is worth spelling out, because the naive version of it is a lie: dropping
+events under load makes a burst read as a **dip**, exactly when the chart matters
+most. Here the rollup is incremented before the decision is made, so the trend
+stays complete and only the stack traces behind part of it are gone. The group
+page says so rather than letting you read a chart that is quietly thinner than it
+looks.
+
+### Rollups, and why the trend outlives the events
+
+Counts are written inline, in the same transaction as the event, for the same
+reason grouping is: a count that happens on arrival cannot miss.
+
+They live in their own table rather than being computed from `events`, and that
+is the whole point. A chart read from raw events would go flat the moment
+retention ran — precisely where the history stops being reconstructible and
+starts being worth having. A tested guarantee, not an intention: the suite
+deletes every event behind a trend and asserts the trend is unchanged.
+
+---
+
+## Regression detection
+
+A group is `open`, `resolved`, `ignored` or `regressed`. An event landing on a
+group somebody called resolved means the fix did not hold — a different
+situation from one nobody has looked at yet, so it gets its own state instead of
+being quietly reopened, and it records which build brought it back next to the
+one it was fixed in.
+
+Only the event that ends the resolved state is reported as a regression. Reading
+the group's status after the update cannot tell that event apart from the
+hundred after it, so the status is read in the same statement, before the upsert
+touches it.
+
+**Status changes go through the ingestion service, not the dashboard.** The
+dashboard reads Postgres with a role holding nothing but `SELECT`, which is what
+lets it keep working while the ingestion service is asleep. Supporting one button
+would mean granting that role write access to the schema. The trade is taken
+knowingly: marking a group resolved can wait out a cold start, reading the
+dashboard cannot.
+
+```
+PATCH /api/groups/{id}   {"status": "resolved", "release": "1.7.0"}
+```
 
 ---
 
@@ -163,20 +247,24 @@ exactly the reason above.
 
 ```
 backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
-  grouping/  parsers, normalizer, fingerprinters, version registry
-  ingest/    endpoint, guard, event and group persistence
+  grouping/   parsers, normalizer, fingerprinters, version registry
+  ingest/     endpoint, guard, event / group / rollup persistence, status
+  retention/  sweep, adaptive window, startup catch-up
 web/       Next.js 16 App Router, deployed to Vercel
-  app/       group list, group detail, how grouping works
-  lib/       Neon handle and the read queries
+  app/        group list, group detail, charts, how grouping works
+  lib/        Neon handle and the read queries
 .githooks/ commit-msg policy, enabled with core.hooksPath
 .github/   CI: policy scan, backend tests, image build, web build
 ```
 
-Grouping runs inline on the ingest path rather than behind a queue: it is a few
-regular expressions and a hash followed by one upsert, so the latency it adds is
-small next to the network call that delivered the event, and a group is visible
-the moment its first event lands. A worker earns its complexity when volume
-outgrows a single free instance, not before.
+Grouping and rollup both run inline on the ingest path rather than behind a
+queue: a few regular expressions, a hash and two upserts, so the latency they add
+is small next to the network call that delivered the event, and a group and its
+trend are visible the moment the first event lands. A worker earns its complexity
+when volume outgrows a single free instance, not before.
+
+Retention is the exception that proves the rule — it is the one job that would
+normally be scheduled, and it is not, for the reason given above.
 
 ## API
 
@@ -254,6 +342,28 @@ Measured against the live deployment on 7 August 2026. Ingestion on Render
 (Frankfurt, free), dashboard on Vercel (`fra1`), database on Neon
 (`eu-central-1`).
 
+### Volume and time, on the live deployment
+
+| Check | Result |
+|---|---|
+| Rollup totals vs group counters | identical for every group |
+| Backfilled rollups from pre-existing events | 5 groups, totals match |
+| Duplicate `event_id` | counted once in the rollup |
+| Trend after its events are deleted | unchanged (tested) |
+| Sweep on a cold start | ran automatically, 14-day window |
+| Sweep after a wake from sleep | **ran again, unprompted** |
+| Storage | 7.8 MB of 512 MB |
+| Pre-grouping orphan events | cleaned up by the migration |
+| Group resolved, then the fault returns | `regressed`, 1.7.0 → 1.8.0 recorded |
+| A later event on an already-regressed group | not re-reported as a regression |
+| `PATCH /api/groups/{id}` without the key | 401 |
+| `PATCH` on a group that does not exist | 404 |
+
+The wake sweep is the one worth pointing at. The service slept for nineteen
+minutes, took 104 seconds to come back, and swept without anybody asking — which
+is the arm of the design that a scheduler cannot have, because there is nothing
+running for a scheduler to fire into.
+
 ### Grouping, on the live deployment
 
 | Check | Result |
@@ -273,36 +383,42 @@ Measured against the live deployment on 7 August 2026. Ingestion on Render
 |---|---|
 | `POST /api/events` writes a row | 202, `stored: true` |
 | Request without the shared secret | 401 |
-| Dashboard renders groups | 5 groups, 12 events |
-| **Dashboard while ingestion is asleep** | **200 in 0.36 s, full data** |
-| Group list response time | 0.36–0.51 s warm |
-| Group detail, including the similarity query | 0.35–0.45 s |
-| First request after a fully idle period | 5.6 s (see below) |
-| Neon query time from `fra1` | 6–12 ms |
-| Ingestion cold start | **95 s, 104 s, 114 s**, measured three times |
+| Dashboard renders groups | 5 groups, with sparklines and storage status |
+| **Dashboard while ingestion is asleep** | **200 in 0.42 s, full data** |
+| Group list, with 24-hour sparklines per group | 0.42–0.45 s warm |
+| Group detail, trend + similarity + frame breakdown | 0.36–0.52 s across all three ranges |
+| First request after a fully idle period | 1.8 s (see below) |
+| Neon query time from `fra1` | 6–16 ms |
+| Ingestion cold start | **95 s, 104 s, 104 s, 114 s**, measured four times |
 | Ingestion when warm | 0.19–0.26 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
 
 ### The claim, and the control that backs it
 
 The dashboard measurements above were taken 19 minutes after the last request to
-the ingestion service, and re-run after grouping shipped because step 1 added
-queries the read path did not have before, including a lateral join and a
-trigram search.
+the ingestion service, and they are re-run every time the read path changes.
+Step 1 added a lateral join and a trigram search; step 2 added rollup lookups, a
+per-group sparkline query and a storage-size query. Each of those is a chance to
+accidentally introduce a dependency on the service that is supposed to be
+optional, so the claim is measured again rather than inherited.
 
 To confirm the service was genuinely asleep rather than merely idle, the next
 request after the measurement was timed: **104 seconds**. So during the same
 window in which the ingestion service could not answer at all, the dashboard
-served complete data — group list, in-app frame breakdown, fingerprint input and
-similar groups — in about a third of a second.
+served everything — group list, sparklines, storage status, trend charts, frame
+breakdown, fingerprint input, similar groups — in under half a second.
 
-That is the architectural bet, tested rather than asserted.
+That is the architectural bet, tested rather than asserted. A static check backs
+the measurement: nothing under `web/` imports a HTTP client or names the
+ingestion host.
 
 ### The read path has its own cold start, and it is not free
 
-The very first dashboard request after a long idle period took **5.6 seconds**;
-every request after it took under half a second. That is the Neon compute waking
-from scale-to-zero, stacked on a cold Vercel function.
+The first dashboard request after a long idle period takes noticeably longer than
+the rest — 5.6 seconds when the database had been idle for hours, 1.8 seconds
+when it had been idle for twenty minutes; every request after it lands under half
+a second. That is the Neon compute waking from scale-to-zero, stacked on a cold
+Vercel function.
 
 This is the price of the connection strategy above, and it is worth paying here:
 5.6 seconds once, against a compute kept awake around the clock and a monthly
