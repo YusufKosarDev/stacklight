@@ -472,6 +472,20 @@ Measured against the live deployment on 7 August 2026. Ingestion on Render
 | A new group with 6 errors and no history | scores 12.0 / 8.9 / 6.0, **none fired** — no baseline to deviate from |
 | Alert with no mail configured | recorded as `disabled`, not queued |
 | Failed delivery | retried, then `failed` with the reason kept |
+| Alert with mail configured | born `pending`, delivered on the first attempt |
+| Delivery latency, first send of the process | 4.5 s |
+| Delivery latency, steady state | **0.92 s** |
+| Alerts raised before mail was configured | stayed `disabled`, never sent retroactively |
+
+The two delivery numbers are worth separating. The first send of a process pays
+for loading the mail stack and negotiating TLS; every send after it is a plain
+SMTP conversation just under a second. Neither is anywhere near the ten-second
+timeout, and the distinction matters because a timeout would have surfaced as
+`failed` with a reason attached rather than as a slow success.
+
+The last row is a design choice rather than an accident: configuring mail on an
+existing deployment does not deliver the backlog, so nobody inherits a mailbox
+full of things that already happened.
 
 The sixth row is the one shadow mode exists for. Sixty errors against a flat
 history of fifty reads as ten sigma to the z-score, because a perfectly steady
