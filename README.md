@@ -4,10 +4,114 @@ Error ingestion and triage for small services.
 
 **Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
 
-**Status: step 2.** Events are grouped into distinct faults, counted into an
-hourly trend that outlives them, and kept inside a storage budget that would
-otherwise take the project down. Alerting and a client library land in later
-steps.
+**Status: step 3.** Events are grouped into distinct faults, counted into an
+hourly trend that outlives them, kept inside a storage budget that would
+otherwise take the project down, and watched by three detectors whose relative
+merits are measured rather than assumed. A client library lands in a later step.
+
+---
+
+## Anomaly detection, and why the textbook answer does not fit
+
+The obvious move is EWMA or a rolling z-score, both of which come from watching
+metric time series. Before writing either, it was worth measuring what this data
+actually looks like:
+
+> **97% of group-hour buckets on this deployment are empty.**
+
+That number decides everything downstream. EWMA and z-score both ask a question
+of the form "how does this hour compare to the usual", and when the usual is
+nothing, *two* errors is several times the baseline and many sigmas above the
+mean. Both detectors are formally correct and completely useless: they fire on
+the first error a group ever produces.
+
+So all three detectors here sit behind an **absolute floor on the count**. It is
+less a tuning parameter than an admission that ratios carry almost no
+information down there, and a test demonstrates the point by lifting the floor
+and watching every detector call a handful of errors a significant deviation.
+
+There is a second guard for the same reason: a group with almost no history is
+not judged statistically at all. A brand-new group producing six errors scores
+12.0, 8.9 and 6.0 against thresholds of 3 — every detector would call it a
+spike, and every one would be wrong, because it has no baseline to deviate from.
+That case is covered by a rule that says what is actually true about it: this
+group is new.
+
+### The three detectors
+
+| Detector | Rule | Where it breaks |
+|---|---|---|
+| `ewma` | Exponentially weighted baseline; fires at a multiple of it | Baseline sits near zero, so the multiple means little |
+| `zscore` | Standard deviations above the trailing mean | Divides by the spread, so a bursty group desensitises the detector watching it |
+| `poisson` | Upper-tail probability of the count under the rate recent hours imply | Ties variance to the rate, so a genuinely erratic group makes it over-fire |
+
+Poisson is active because the shape of the data is a counting process — small
+non-negative integers arriving in bursts — and it takes its spread from the rate
+rather than needing to be told one per group. Six errors is remarkable for a
+group that normally sees one and unremarkable for a group that normally sees
+fifty, and no per-group tuning says so.
+
+That is the argument. The scorecard is what decides whether the argument
+survives contact with the data.
+
+### Shadow mode
+
+Every detector judges every bucket. Exactly one is allowed to raise an alert;
+the others run in shadow and have their verdicts recorded anyway — **including
+the ones that decline to fire**, since a detector that only reported firings
+could never be measured for what it missed, and could improve its record by
+becoming more timid.
+
+Because they see identical input at the same moment, changing the active
+detector is a configuration change whose effect was measured before it was made.
+
+### Self-scoring, and what it is not
+
+Old verdicts are revisited once there is hindsight to judge them by. An hour
+counts as a genuine surge when its count stands clear of the rate around it,
+measured from **both** sides — information the detector was not allowed to have,
+which is the only reason the scorer can disagree with it. Each verdict then
+falls into one of four boxes and precision and recall follow.
+
+**This is not accuracy, and the dashboard says so in the same words.** Nobody
+labels these hours by hand. The reference is a rule, so the numbers measure
+agreement with a rule applied in hindsight, and a detector could score well by
+agreeing with a rule that is itself wrong. What they are good for is comparing
+detectors against each other on identical data, which is the question being
+asked. They are shown unfiltered, including where a shadow beats the detector in
+charge.
+
+### Alert delivery
+
+An alert is a row before it is an email. It is written in the same transaction
+as the event that caused it, so a failed send, an unreachable mail server, or an
+instance sleeping mid-send cannot lose one. Delivery is a best-effort drain
+afterwards, triggered on the same two signals retention uses.
+
+Without mail configured, alerts are recorded as `disabled` rather than queued —
+so setting mail up later does not fire a backlog of everything that ever
+happened.
+
+One alert per group per cooldown. A group in the middle of a spike produces
+events continuously, and an alert per event is how a mailbox teaches somebody to
+filter the whole feature into a folder they never open.
+
+### ⚠️ Alert latency, stated plainly
+
+Detection runs when an event arrives, because that is the only moment this
+service is reliably running. The consequences are real and not hidden:
+
+- An alert is not raised when a spike begins. It is raised on the next event
+  that reaches a **woken** instance, and waking takes about a hundred seconds.
+- **A spike that begins and ends entirely within a quiet period is never seen.**
+  Nothing arrives to trigger an evaluation, so nothing evaluates.
+- A drop to zero cannot be detected at all, by construction. Absence of events
+  is absence of triggers.
+
+A scheduler would not fix this. It would fire into a process that is not
+running, which is the failure retention already ran into in step 2 — the
+difference being that retention can catch up on waking, and a missed spike
+cannot be caught up on.
 
 ---
 
@@ -250,8 +354,10 @@ backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
   grouping/   parsers, normalizer, fingerprinters, version registry
   ingest/     endpoint, guard, event / group / rollup persistence, status
   retention/  sweep, adaptive window, startup catch-up
+  detection/  three detectors, shadow recording, self-scoring
+  alerting/   outbox, cooldown, best-effort mail delivery
 web/       Next.js 16 App Router, deployed to Vercel
-  app/        group list, group detail, charts, how grouping works
+  app/        groups, charts, alerts, detector scorecard, how grouping works
   lib/        Neon handle and the read queries
 .githooks/ commit-msg policy, enabled with core.hooksPath
 .github/   CI: policy scan, backend tests, image build, web build
@@ -330,9 +436,20 @@ shape.
 | Service | Key |
 |---|---|
 | Render | `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, `INGEST_API_KEY`, `JAVA_TOOL_OPTIONS` |
+| Render, optional | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE` |
 | Vercel | `DATABASE_URL` |
 
 Render sets `PORT` itself, and the application reads it.
+
+The mail variables are optional in the strict sense: with none of them set,
+detection still runs and alerts are still recorded, they are simply marked
+`disabled` instead of queued. `MAIL_PORT` defaults to **2525** rather than 587,
+because Render blocks the usual submission port outbound.
+
+`/actuator/health` deliberately checks neither the database nor the mail server.
+It is the liveness target and the deploy gate, so it must not be able to fail
+over something outside this process — a lesson this project learned the
+expensive way, twice.
 
 ---
 
@@ -341,6 +458,29 @@ Render sets `PORT` itself, and the application reads it.
 Measured against the live deployment on 7 August 2026. Ingestion on Render
 (Frankfurt, free), dashboard on Vercel (`fra1`), database on Neon
 (`eu-central-1`).
+
+### Detection, on the live deployment
+
+| Check | Result |
+|---|---|
+| Detectors recorded per bucket | 3 of 3, firing or not |
+| Detectors marked active | exactly 1 (`poisson`) |
+| A spike over a near-empty baseline | all three fired, scores 16.0 / 12.6 / 7.9 against a threshold of 3 |
+| Alerts raised from that | **1** — only the active detector may act |
+| Eight events into the same spike | still 1 alert, cooldown held |
+| Steady baseline of 50, hour of 60 | only `zscore` fired; no alert, disagreement recorded |
+| A new group with 6 errors and no history | scores 12.0 / 8.9 / 6.0, **none fired** — no baseline to deviate from |
+| Alert with no mail configured | recorded as `disabled`, not queued |
+| Failed delivery | retried, then `failed` with the reason kept |
+
+The sixth row is the one shadow mode exists for. Sixty errors against a flat
+history of fifty reads as ten sigma to the z-score, because a perfectly steady
+history collapses its denominator onto the floor and the floor then does all the
+work; Poisson puts the same hour at roughly one in eleven and says nothing. The
+disagreement is recorded and nobody is paged.
+
+The seventh is the guard that stops a detector from being confidently wrong
+about a group it has never seen before.
 
 ### Volume and time, on the live deployment
 
@@ -384,29 +524,32 @@ running for a scheduler to fire into.
 | `POST /api/events` writes a row | 202, `stored: true` |
 | Request without the shared secret | 401 |
 | Dashboard renders groups | 5 groups, with sparklines and storage status |
-| **Dashboard while ingestion is asleep** | **200 in 0.42 s, full data** |
-| Group list, with 24-hour sparklines per group | 0.42–0.45 s warm |
+| **Dashboard while ingestion is asleep** | **200 in 0.37 s, full data** |
+| Group list, with 24-hour sparklines per group | 0.37–0.45 s warm |
 | Group detail, trend + similarity + frame breakdown | 0.36–0.52 s across all three ranges |
-| First request after a fully idle period | 1.8 s (see below) |
+| Alerts and detector scorecard pages | 0.31–0.36 s |
+| First request after a fully idle period | 1.8–2.2 s (see below) |
 | Neon query time from `fra1` | 6–16 ms |
-| Ingestion cold start | **95 s, 104 s, 104 s, 114 s**, measured four times |
+| Ingestion cold start | **95 s, 104 s, 104 s, 106 s, 114 s**, measured five times |
 | Ingestion when warm | 0.19–0.26 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
 
 ### The claim, and the control that backs it
 
-The dashboard measurements above were taken 19 minutes after the last request to
+The dashboard measurements above were taken 20 minutes after the last request to
 the ingestion service, and they are re-run every time the read path changes.
 Step 1 added a lateral join and a trigram search; step 2 added rollup lookups, a
-per-group sparkline query and a storage-size query. Each of those is a chance to
-accidentally introduce a dependency on the service that is supposed to be
-optional, so the claim is measured again rather than inherited.
+per-group sparkline query and a storage-size query; step 3 added two whole pages.
+Each of those is a chance to accidentally introduce a dependency on the service
+that is supposed to be optional, so the claim is measured again rather than
+inherited.
 
 To confirm the service was genuinely asleep rather than merely idle, the next
-request after the measurement was timed: **104 seconds**. So during the same
+request after the measurement was timed: **106 seconds**. So during the same
 window in which the ingestion service could not answer at all, the dashboard
 served everything — group list, sparklines, storage status, trend charts, frame
-breakdown, fingerprint input, similar groups — in under half a second.
+breakdown, fingerprint input, similar groups, alerts and the detector
+scorecard — in under half a second.
 
 That is the architectural bet, tested rather than asserted. A static check backs
 the measurement: nothing under `web/` imports a HTTP client or names the
