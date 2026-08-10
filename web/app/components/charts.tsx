@@ -96,9 +96,20 @@ export function TrendChart({
       </figcaption>
 
       <div className="overflow-x-auto">
-        <div className="min-w-[30rem]">
+        {/*
+          Width scales with the number of buckets rather than being pinned at
+          30rem. A fixed floor plus a per-bar cap left a seven-day chart sitting
+          in the left third of its own panel with the rest empty, and forced a
+          scrollbar onto ranges narrow enough not to need one.
+        */}
+        <div style={{ minWidth: `${Math.max(buckets.length * 18, 240)}px` }}>
+          {/*
+            Centred, because the bars are capped. Seven daily buckets across a
+            desktop panel would otherwise be 150px slabs that read as a
+            segmented bar rather than a series.
+          */}
           <div
-            className="relative flex h-40 items-end gap-[2px] border-b"
+            className="relative flex h-40 items-end justify-center gap-[2px] border-b"
             style={{ borderColor: GRIDLINE }}
           >
             {/* One recessive gridline at the peak, so the tallest column has a reference. */}
@@ -110,12 +121,12 @@ export function TrendChart({
 
             {buckets.map((bucket, index) => {
               const height =
-                bucket.count === 0 ? 2 : Math.max(4, (bucket.count / peak) * 156);
+                bucket.count === 0 ? 2 : Math.max(4, (bucket.count / peak) * 138);
               return (
                 <div
                   key={bucket.iso}
                   className="group/bar relative flex flex-1 justify-center"
-                  style={{ maxWidth: "24px" }}
+                  style={{ maxWidth: "48px" }}
                 >
                   <span
                     className="w-full transition-opacity group-hover/bar:opacity-80"
@@ -145,12 +156,12 @@ export function TrendChart({
             })}
           </div>
 
-          <div className="mt-2 flex gap-[2px]">
+          <div className="mt-2 flex justify-center gap-[2px]">
             {buckets.map((bucket, index) => (
               <div
                 key={bucket.iso}
                 className="flex-1 text-center font-mono text-[10px] tabular-nums"
-                style={{ maxWidth: "24px", color: MUTED_INK }}
+                style={{ maxWidth: "48px", color: MUTED_INK }}
               >
                 {index % tickEvery === 0 ? bucket.label : " "}
               </div>
