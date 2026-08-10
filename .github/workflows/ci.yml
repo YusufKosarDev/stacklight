@@ -168,6 +168,13 @@ jobs:
         working-directory: web
         run: npm run lint
 
+      # node --test on TypeScript directly, which Node 24 runs without a
+      # compile step. No test runner is installed: the dashboard's dependency
+      # list is part of what it is.
+      - name: Test
+        working-directory: web
+        run: npm test
+
       # Runs without DATABASE_URL on purpose: the dashboard must never reach the
       # database at build time.
       - name: Build
