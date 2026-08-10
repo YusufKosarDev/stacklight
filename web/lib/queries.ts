@@ -1,4 +1,5 @@
 import { sql } from "@/lib/db";
+import type { Cursor, GroupFilters } from "@/lib/group-filters";
 
 export type GroupStatus = "open" | "resolved" | "ignored" | "regressed";
 
@@ -70,16 +71,131 @@ export type StorageStatus = {
 
 const UTC = "YYYY-MM-DD HH24:MI:SS";
 
-export async function listGroups(): Promise<GroupSummary[]> {
-  return (await sql()`
-    select id, title, service, platform, level, status, culprit, degraded_reason,
-           event_count::int as event_count,
-           to_char(first_seen at time zone 'utc', ${UTC}) as first_seen,
-           to_char(last_seen  at time zone 'utc', ${UTC}) as last_seen
-      from event_groups
-     order by last_seen desc
-     limit 100
-  `) as GroupSummary[];
+/**
+ * Full precision, unlike the display format above.
+ *
+ * The keyset cursor is a sort key, and `last_seen` rendered to the second would
+ * sit on a row boundary: every group sharing that second would be skipped or
+ * repeated at the page edge.
+ */
+const CURSOR_TS = 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"';
+
+export type GroupPage = {
+  groups: GroupSummary[];
+  /** Position to resume from, or null when this is the last page. */
+  nextCursor: string | null;
+};
+
+/**
+ * One page of groups, filtered.
+ *
+ * Every filter is written as "null means no filter" so the whole thing stays a
+ * single static statement: the driver parameterises `${}`, and building a WHERE
+ * clause by concatenation is how that guarantee gets lost.
+ *
+ * Keyset rather than offset. An offset re-counts the rows it skips and, on a
+ * list ordered by recency, quietly skips or repeats rows whenever an event
+ * arrives between one page and the next — which on this list is constantly.
+ */
+export async function listGroups(
+  filters: GroupFilters,
+  cursor: Cursor | null,
+  limit: number,
+): Promise<GroupPage> {
+  const cursorTs = cursor?.lastSeen ?? null;
+  const cursorId = cursor?.id ?? 0;
+
+  // One more than asked for: its presence is what says there is a next page,
+  // without a second COUNT over the whole filtered set.
+  const rows = (await sql()`
+    select g.id, g.title, g.service, g.platform, g.level, g.status, g.culprit,
+           g.degraded_reason,
+           g.event_count::int as event_count,
+           to_char(g.first_seen at time zone 'utc', ${UTC})      as first_seen,
+           to_char(g.last_seen  at time zone 'utc', ${UTC})      as last_seen,
+           to_char(g.last_seen  at time zone 'utc', ${CURSOR_TS}) as cursor_ts
+      from event_groups g
+     where (${filters.service}::text is null or g.service = ${filters.service})
+       and (${filters.status}::text is null or g.status = ${filters.status})
+       and (${filters.q}::text is null or g.title ilike '%' || ${filters.q} || '%')
+       and (${cursorTs}::timestamptz is null
+            or (g.last_seen, g.id) < (${cursorTs}::timestamptz, ${cursorId}::bigint))
+     order by g.last_seen desc, g.id desc
+     limit ${limit + 1}
+  `) as (GroupSummary & { cursor_ts: string })[];
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page.at(-1);
+
+  return {
+    groups: page,
+    nextCursor:
+      hasMore && last ? `${last.cursor_ts}|${last.id}` : null,
+  };
+}
+
+/**
+ * How many groups sit in each status, for the filter chips.
+ *
+ * Deliberately ignores the status filter while respecting the others: these
+ * numbers are what the chips are labelled with, and a count that collapsed to
+ * the status already selected would stop being a way to navigate.
+ */
+export async function countsByStatus(
+  filters: GroupFilters,
+): Promise<Record<string, number>> {
+  const rows = (await sql()`
+    select g.status, count(*)::int as n
+      from event_groups g
+     where (${filters.service}::text is null or g.service = ${filters.service})
+       and (${filters.q}::text is null or g.title ilike '%' || ${filters.q} || '%')
+     group by g.status
+  `) as { status: string; n: number }[];
+
+  return Object.fromEntries(rows.map((row) => [row.status, row.n]));
+}
+
+/**
+ * Hourly totals across everything the current filter selects.
+ *
+ * A sum in the database rather than in the page. The overview used to add up
+ * every group's sparkline in JavaScript, which was fine at nine groups and
+ * becomes a full table read at nine hundred -- and once the list is paged,
+ * summing the visible rows would quietly change the chart's meaning from "all
+ * events" to "events on this page".
+ */
+export async function getOverviewTrend(
+  filters: GroupFilters,
+): Promise<{ hourly: number[]; total: number }> {
+  const rows = (await sql()`
+    select coalesce(sum(r.event_count), 0)::int as count
+      from generate_series(date_trunc('hour', now()) - interval '23 hours',
+                           date_trunc('hour', now()),
+                           interval '1 hour') as bucket
+      left join event_rollups r
+             on r.bucket_start = bucket
+            and r.group_id in (
+                  select g.id from event_groups g
+                   where (${filters.service}::text is null or g.service = ${filters.service})
+                     and (${filters.status}::text is null or g.status = ${filters.status})
+                     and (${filters.q}::text is null or g.title ilike '%' || ${filters.q} || '%')
+                )
+     group by bucket
+     order by bucket
+  `) as { count: number }[];
+
+  const hourly = rows.map((row) => row.count);
+  return { hourly, total: hourly.reduce((sum, n) => sum + n, 0) };
+}
+
+/** Distinct services, for the filter's dropdown. */
+export async function listServices(): Promise<string[]> {
+  const rows = (await sql()`
+    select distinct service from event_groups order by service
+  `) as { service: string }[];
+
+  return rows.map((row) => row.service);
 }
 
 /**
@@ -89,13 +205,22 @@ export async function listGroups(): Promise<GroupSummary[]> {
  * of the table, not a detail view, and a query per row turns a page render into a
  * hundred round trips.
  */
-export async function listSparklines(): Promise<Map<number, number[]>> {
+export async function listSparklines(
+  groupIds: number[],
+): Promise<Map<number, number[]>> {
+  // Nothing on the page, nothing to ask for. Without this the query would run
+  // with an empty array and return nothing, slower.
+  if (groupIds.length === 0) {
+    return new Map();
+  }
+
   const rows = (await sql()`
     select r.group_id,
            extract(epoch from (date_trunc('hour', now()) - r.bucket_start)) / 3600 as hours_ago,
            r.event_count::int as event_count
       from event_rollups r
-     where r.bucket_start > date_trunc('hour', now()) - interval '24 hours'
+     where r.group_id = any(${groupIds}::bigint[])
+       and r.bucket_start > date_trunc('hour', now()) - interval '24 hours'
   `) as { group_id: number; hours_ago: number; event_count: number }[];
 
   const byGroup = new Map<number, number[]>();
