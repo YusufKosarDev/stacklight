@@ -110,7 +110,7 @@ public class DetectionService {
     public void evaluateNewGroup(long groupId, int ageHours, long eventCount) {
         if (ageHours <= properties.newGroupWindowHours()
                 && eventCount >= properties.newGroupThreshold()) {
-            alertService.raiseNewGroup(groupId, eventCount);
+            alertService.raiseNewGroup(groupId);
         }
     }
 

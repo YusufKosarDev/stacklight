@@ -123,6 +123,13 @@ public class IngestService {
             alertService.raiseRegression(filed.groupId());
         }
 
+        // A group too young for the statistical detectors to judge is covered by the one
+        // rule that says something true about it: it is new. The two cannot both fire --
+        // a detector needs min-history-hours of history and a group inside the new-group
+        // window cannot have that much -- so this runs last and the cooldown keeps it
+        // from repeating once per event through the burst that triggered it.
+        detectionService.evaluateNewGroup(filed.groupId(), filed.ageHours(), filed.eventCount());
+
         // Everything below runs after the event is safely committed, never as part of
         // it: a slow sweep, a scoring pass or an unreachable mail server must not be
         // able to reject an event.

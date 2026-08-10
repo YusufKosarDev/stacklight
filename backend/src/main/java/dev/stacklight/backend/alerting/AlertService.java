@@ -45,7 +45,8 @@ public class AlertService {
         return raise(groupId, "spike", Optional.of(detection));
     }
 
-    public Optional<Long> raiseNewGroup(long groupId, long eventCount) {
+    /** Raised when a group that did not exist a few hours ago is already producing volume. */
+    public Optional<Long> raiseNewGroup(long groupId) {
         return raise(groupId, "new_group", Optional.empty());
     }
 
