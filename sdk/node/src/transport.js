@@ -1,9 +1,18 @@
 "use strict";
 
-/** Outcome of one delivery attempt. `retryable: false` means trying again cannot help. */
-const ok = () => ({ delivered: true, retryable: false, detail: null });
-const retry = (detail) => ({ delivered: false, retryable: true, detail });
-const reject = (detail) => ({ delivered: false, retryable: false, detail });
+/**
+ * Outcome of one delivery attempt. `retryable: false` means trying again cannot help.
+ *
+ * `deliveredBeforeFailure` says how many events from the front of the batch the collector
+ * had already accepted when the attempt stopped. It only means anything while `delivered`
+ * is false, and it is what keeps a partial failure from being treated as a total one: the
+ * wire format is one event per request, so a batch can stop halfway, and re-sending the
+ * accepted half would spend a round trip each to be told by the collector's duplicate
+ * check that it already had them.
+ */
+const ok = () => ({ delivered: true, retryable: false, detail: null, deliveredBeforeFailure: 0 });
+const retry = (detail) => ({ delivered: false, retryable: true, detail, deliveredBeforeFailure: 0 });
+const reject = (detail) => ({ delivered: false, retryable: false, detail, deliveredBeforeFailure: 0 });
 
 /**
  * Posts events to the collector.
@@ -21,11 +30,15 @@ function createHttpTransport(options, log) {
      *   shutdown bound quietly becomes the sum of the two.
      */
     async send(batch, timeoutMs = options.requestTimeoutMs) {
+      let delivered = 0;
       for (const event of batch) {
         const result = await sendOne(event, options, log, timeoutMs);
         if (!result.delivered) {
-          return result;
+          // Say how far it got. Everything before this event is with the collector
+          // already, and reporting a bare failure would send the whole batch again.
+          return { ...result, deliveredBeforeFailure: delivered };
         }
+        delivered += 1;
       }
       return ok();
     },

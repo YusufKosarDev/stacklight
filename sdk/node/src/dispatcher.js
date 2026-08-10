@@ -66,17 +66,28 @@ class Dispatcher {
       return true;
     }
 
+    // A batch is one request per event, so it can stop in the middle. What the collector
+    // already took is delivered and counted; only the rest is still owed. Sending the
+    // accepted part again would cost a round trip each to be told by the collector's
+    // duplicate check that it already had them, and against a 429 it would feed the very
+    // problem it is reacting to.
+    const accepted = result.deliveredBeforeFailure ?? 0;
+    if (accepted > 0) {
+      this.sentCount += accepted;
+    }
+    const remainder = batch.slice(accepted);
+
     this.failedAttempts += 1;
     this.lastError = result.detail;
 
     if (!result.retryable) {
-      this.givenUpCount += batch.length;
-      this.log(`discarding ${batch.length} events: ${result.detail}`);
+      this.givenUpCount += remainder.length;
+      this.log(`discarding ${remainder.length} events: ${result.detail}`);
       return true;
     }
 
-    this.queue.requeueFront(batch);
-    this.log(`requeued ${batch.length} events: ${result.detail}`);
+    this.queue.requeueFront(remainder);
+    this.log(`requeued ${remainder.length} events: ${result.detail}`);
     return false;
   }
 

@@ -39,6 +39,35 @@ function fakeTransport() {
   };
 }
 
+/**
+ * Accepts events one at a time, the way the wire format really works, and stops after a
+ * chosen number. Records everything it was handed, so a redelivery is visible.
+ */
+function perEventTransport() {
+  const state = { handed: [], accepted: [], acceptsPerAttempt: Infinity, retryable: true };
+
+  return {
+    state,
+    async send(batch) {
+      let delivered = 0;
+      for (const event of batch) {
+        state.handed.push(event.eventId);
+        if (delivered >= state.acceptsPerAttempt) {
+          return {
+            delivered: false,
+            retryable: state.retryable,
+            detail: state.retryable ? "collector stopped answering" : "401",
+            deliveredBeforeFailure: delivered,
+          };
+        }
+        state.accepted.push(event.eventId);
+        delivered += 1;
+      }
+      return { delivered: true, retryable: false, detail: null, deliveredBeforeFailure: 0 };
+    },
+  };
+}
+
 const options = (extra = {}) => ({
   endpoint: "https://collector.invalid/api/events",
   apiKey: "test-key",
@@ -103,6 +132,52 @@ test("a rejection is not retried for ever", async () => {
   assert.equal(transport.state.attempts, 1);
   assert.match(client.stats().lastError, /401/);
   await client.close();
+});
+
+/** Drives one delivery attempt with nothing timing-dependent about it. */
+const oneAttempt = (transport, count) => {
+  const queue = new EventQueue(100);
+  for (let i = 0; i < count; i++) {
+    queue.offer({ eventId: `e${i}` });
+  }
+  const dispatcher = new Dispatcher(queue, transport, normalize(options()), () => {});
+  return { queue, dispatcher, batch: queue.drain(count) };
+};
+
+test("a batch that stops halfway only requeues the part that did not arrive", async () => {
+  // One event per request means a batch can stop in the middle. Treating that as a total
+  // failure put the accepted half back too, to be told by the collector's duplicate check
+  // that it already had them -- a round trip each to learn nothing, and against a 429 the
+  // retry feeds the very problem it is reacting to.
+  const transport = perEventTransport();
+  transport.state.acceptsPerAttempt = 3;
+  const { queue, dispatcher, batch } = oneAttempt(transport, 8);
+
+  const finished = await dispatcher.deliver(batch, 1000);
+
+  assert.equal(finished, false, "a partial failure is still worth another attempt");
+  assert.deepEqual(transport.state.accepted, ["e0", "e1", "e2"]);
+  assert.equal(dispatcher.sentCount, 3, "what the collector took counts as sent");
+  assert.equal(queue.size, 5, "only what it did not take goes back");
+  assert.deepEqual(
+    queue.drain(10).map((event) => event.eventId),
+    ["e3", "e4", "e5", "e6", "e7"],
+    "and it goes back in order, at the front",
+  );
+});
+
+test("a rejection part way through only discards what was still owed", async () => {
+  const transport = perEventTransport();
+  transport.state.acceptsPerAttempt = 2;
+  transport.state.retryable = false;
+  const { queue, dispatcher, batch } = oneAttempt(transport, 6);
+
+  const finished = await dispatcher.deliver(batch, 1000);
+
+  assert.equal(finished, true, "a rejection is final");
+  assert.equal(dispatcher.sentCount, 2, "the two that landed are not counted as lost");
+  assert.equal(dispatcher.givenUpCount, 4, "only the four that did not land are given up");
+  assert.equal(queue.size, 0);
 });
 
 test("a full queue drops the oldest and says so", async () => {

@@ -73,8 +73,14 @@ final class Dispatcher {
         }
     }
 
-    /** @return true when the batch was delivered or definitively rejected */
-    private boolean deliver(List<StacklightEvent> batch, java.time.Duration timeout) {
+    /**
+     * Package-private rather than private so one attempt can be driven directly from a
+     * test. Going through the worker thread means asserting on whatever the scheduler
+     * happened to batch together, which is not the same thing as asserting on the rule.
+     *
+     * @return true when the batch was delivered or definitively rejected
+     */
+    boolean deliver(List<StacklightEvent> batch, java.time.Duration timeout) {
         Transport.Result result = transport.send(batch, timeout);
 
         if (result.delivered()) {
