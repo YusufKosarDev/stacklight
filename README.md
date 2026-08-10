@@ -184,11 +184,20 @@ survives contact with the data.
 
 ### Shadow mode
 
-Every detector judges every bucket. Exactly one is allowed to raise an alert;
-the others run in shadow and have their verdicts recorded anyway — **including
-the ones that decline to fire**, since a detector that only reported firings
-could never be measured for what it missed, and could improve its record by
-becoming more timid.
+Every detector judges every bucket that clears the floor. Exactly one is allowed
+to raise an alert; the others run in shadow and have their verdicts recorded
+anyway — **including the ones that decline to fire**, since a detector that only
+reported firings could never be measured for what it missed, and could improve
+its record by becoming more timid.
+
+Below the floor nothing is evaluated and nothing is recorded. No detector could
+fire down there, so the history query and the three evaluations are skipped
+outright — the same reasoning that makes the floor necessary also makes it a
+cheap short circuit. The consequence is worth naming: the scorecard's true
+negatives are drawn only from hours that reached the floor, not from the 97% of
+buckets that are empty. The scorer applies the same floor, so the comparison
+between detectors stays consistent; it is the absolute counts that would be
+flattered by reading them as "out of every hour that ever happened".
 
 Because they see identical input at the same moment, changing the active
 detector is a configuration change whose effect was measured before it was made.
