@@ -91,6 +91,12 @@ const KINDS: Record<
     icon: "↺",
     className: "bg-danger-bg text-danger",
   },
+  // The only kind raised by nothing arriving rather than something.
+  silence: {
+    label: "went quiet",
+    icon: "◌",
+    className: "bg-accent/15 text-accent-hi",
+  },
 };
 
 export function AlertKindBadge({ kind }: { kind: string }) {
