@@ -173,6 +173,8 @@ export default async function Page() {
             <span className="font-mono text-xs tabular-nums text-ink-low">
               {result.summary.openCount} open · {result.summary.regressedCount}{" "}
               regressed · {result.summary.resolvedCount} resolved
+              {result.summary.ignoredCount > 0 &&
+                ` · ${result.summary.ignoredCount} ignored`}
             </span>
           </div>
 

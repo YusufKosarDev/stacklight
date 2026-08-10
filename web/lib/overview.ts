@@ -4,6 +4,11 @@ export type OverviewSummary = {
   openCount: number;
   regressedCount: number;
   resolvedCount: number;
+  /**
+   * Counted so the tally above the list adds up to the list. Ignored groups are
+   * still listed; leaving them out of the counts made the header look wrong.
+   */
+  ignoredCount: number;
   events24h: number;
   /** 24 hourly totals across every group, oldest first. */
   hourly: number[];
@@ -33,6 +38,7 @@ export function summarise(
     openCount: groups.filter((g) => g.status === "open").length,
     regressedCount: groups.filter((g) => g.status === "regressed").length,
     resolvedCount: groups.filter((g) => g.status === "resolved").length,
+    ignoredCount: groups.filter((g) => g.status === "ignored").length,
     events24h: hourly.reduce((sum, count) => sum + count, 0),
     hourly,
   };
