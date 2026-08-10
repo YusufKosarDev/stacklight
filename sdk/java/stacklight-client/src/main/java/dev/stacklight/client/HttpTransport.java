@@ -36,11 +36,15 @@ final class HttpTransport implements Transport {
 
     @Override
     public Result send(List<StacklightEvent> batch, Duration timeout) {
+        int delivered = 0;
         for (StacklightEvent event : batch) {
             Result result = sendOne(event, timeout);
             if (!result.delivered()) {
-                return result;
+                // Say how far it got. Everything before this event is with the collector
+                // already, and reporting a bare failure would send the whole batch again.
+                return result.after(delivered);
             }
+            delivered++;
         }
         return Result.ok();
     }
