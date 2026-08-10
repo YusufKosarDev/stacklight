@@ -36,3 +36,6 @@ npm-debug.log*
 
 # Brainstorming mockups. Working material, not part of the project.
 .superpowers/
+
+# Browser-automation scratch output from local verification runs.
+.playwright-mcp/
