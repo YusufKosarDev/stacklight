@@ -38,7 +38,12 @@ export function Sidebar({
         </span>
       </Link>
 
-      <nav className="flex flex-1 gap-1 overflow-x-auto lg:mt-5 lg:flex-col lg:overflow-visible">
+      {/*
+        Wraps rather than scrolls on a narrow screen. Four short links fit on two
+        rows, and a scrolling nav both hides the last item and leaves a native
+        scrollbar sitting across a dark surface.
+      */}
+      <nav className="flex flex-1 flex-wrap gap-1 lg:mt-5 lg:flex-col lg:flex-nowrap">
         {LINKS.map((link) => {
           const active = link.key === current;
           const count = countFor(link.key, counts);
