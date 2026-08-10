@@ -33,3 +33,6 @@ next-env.d.ts
 .DS_Store
 Thumbs.db
 npm-debug.log*
+
+# Brainstorming mockups. Working material, not part of the project.
+.superpowers/
