@@ -83,10 +83,15 @@ export function Sidebar({
             aria-hidden
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok shadow-[0_0_7px_rgba(61,214,140,0.8)]"
           />
-          Postgres
-          {queryMs !== undefined && (
-            <span className="tabular-nums">· {(queryMs / 1000).toFixed(2)} s</span>
-          )}
+          <span>
+            Postgres
+            {queryMs !== undefined && (
+              <span className="tabular-nums">
+                {" · "}
+                {(queryMs / 1000).toFixed(2)} s
+              </span>
+            )}
+          </span>
         </span>
         <span className="mt-1.5 block text-[10px] leading-relaxed text-ink-faint">
           Renders whether or not the ingestion service is awake.
