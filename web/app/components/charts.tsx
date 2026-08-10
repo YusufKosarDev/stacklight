@@ -4,13 +4,19 @@ import type { Bucket } from "@/lib/queries";
  * Chart tokens.
  *
  * The dashboard only ships a dark surface, so only the dark steps are defined.
- * `--series` is the validated dark-mode blue; it clears 3:1 against the page
- * surface (#09090b) and sits inside the dark lightness band.
+ * Contrast against the page surface (#09090b) was measured for this palette
+ * rather than inherited from the last one: SERIES is 4.58:1 and SERIES_HI is
+ * 6.37:1, both clear of the 3:1 a graphical mark needs.
+ *
+ * Emphasis is carried by getting brighter rather than by everything else going
+ * dim, which is why there is no muted step: the old palette had one and it sat
+ * at 1.89:1, which is fine for a fill and not fine for the only thing marking a
+ * bar as present.
  */
-const SERIES = "#3987e5";
-const SERIES_MUTED = "#1c3f6b";
-const MUTED_INK = "#898781";
-const GRIDLINE = "#2c2c2a";
+const SERIES = "#7c5cff";
+const SERIES_HI = "#9b7cff";
+const MUTED_INK = "#9a9aa6";
+const GRIDLINE = "#1f1f28";
 
 /**
  * Twenty-four hourly counts, drawn small enough to live in a table row.
@@ -46,7 +52,7 @@ export function Sparkline({
               height: `${height}px`,
               width: "3px",
               borderRadius: count === 0 ? "1px" : "2px 2px 0 0",
-              background: count === 0 ? GRIDLINE : isCurrent ? SERIES : SERIES_MUTED,
+              background: count === 0 ? GRIDLINE : isCurrent ? SERIES_HI : SERIES,
             }}
           />
         );
@@ -81,7 +87,7 @@ export function TrendChart({
   return (
     <figure className="m-0">
       <figcaption className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <span className="text-sm text-zinc-400">
+        <span className="text-sm text-ink-low">
           Events per {range === "24h" ? "hour" : "day"}, from the rollups
         </span>
         <span className="font-mono text-xs" style={{ color: MUTED_INK }}>
@@ -129,7 +135,7 @@ export function TrendChart({
                   )}
                   {/* Per-mark tooltip. Pure hover, so the page stays a server component. */}
                   <span
-                    className="pointer-events-none absolute bottom-full z-10 mb-1 hidden whitespace-nowrap rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-[11px] text-zinc-200 shadow-lg group-hover/bar:block"
+                    className="pointer-events-none absolute bottom-full z-10 mb-1 hidden whitespace-nowrap rounded border border-edge bg-surface-0 px-2 py-1 font-mono text-[11px] text-ink shadow-lg group-hover/bar:block"
                     role="tooltip"
                   >
                     {bucket.label} &middot; {bucket.count}
@@ -154,20 +160,22 @@ export function TrendChart({
       </div>
 
       <details className="mt-4">
-        <summary className="cursor-pointer text-xs text-zinc-500 transition-colors hover:text-zinc-300">
+        <summary className="cursor-pointer text-xs text-ink-low transition-colors hover:text-ink">
           Table view
         </summary>
-        <div className="mt-2 max-h-56 overflow-auto rounded border border-zinc-800">
+        <div className="mt-2 max-h-56 overflow-auto rounded border border-edge">
           <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-zinc-900">
-              <tr className="text-zinc-500">
+            {/* Opaque, not the translucent panel surface: this header is sticky
+                and rows would scroll visibly through it. */}
+            <thead className="sticky top-0 bg-surface-0">
+              <tr className="text-ink-low">
                 <th className="px-3 py-2 font-medium">Bucket (UTC)</th>
                 <th className="px-3 py-2 text-right font-medium">Events</th>
               </tr>
             </thead>
-            <tbody className="font-mono tabular-nums text-zinc-300">
+            <tbody className="font-mono tabular-nums text-ink">
               {buckets.map((bucket) => (
-                <tr key={bucket.iso} className="border-t border-zinc-800/60">
+                <tr key={bucket.iso} className="border-t border-edge">
                   <td className="px-3 py-1.5">{bucket.iso}</td>
                   <td className="px-3 py-1.5 text-right">{bucket.count}</td>
                 </tr>
@@ -176,6 +184,66 @@ export function TrendChart({
           </table>
         </div>
       </details>
+    </figure>
+  );
+}
+
+/**
+ * Every group's events, by hour, for the last day.
+ *
+ * Takes an already-summed array rather than querying. The per-group rollups are
+ * fetched for the sparklines anyway, so the aggregate is a sum over data the
+ * page is already holding rather than a second trip to the database on the
+ * critical read path.
+ *
+ * @param hourly 24 counts, oldest first
+ */
+export function OverviewTrend({
+  hourly,
+  total,
+}: {
+  hourly: number[];
+  total: number;
+}) {
+  const peak = Math.max(...hourly, 1);
+  const peakIndex = hourly.findIndex((count) => count === peak && peak > 0);
+
+  return (
+    <figure className="m-0">
+      <figcaption className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-sm font-medium text-ink">
+          All events, last 24 hours
+        </span>
+        <span className="font-mono text-xs tabular-nums text-ink-low">
+          {total} total &middot; peak {peak}
+        </span>
+      </figcaption>
+
+      <div
+        className="flex h-24 items-end gap-[3px] border-b"
+        style={{ borderColor: GRIDLINE }}
+        role="img"
+        aria-label={`${total} events over the last 24 hours, peaking at ${peak} in one hour`}
+      >
+        {hourly.map((count, index) => (
+          <span
+            key={index}
+            className="flex-1 rounded-t-[3px]"
+            style={{
+              height:
+                count === 0 ? "2px" : `${Math.max(4, (count / peak) * 92)}px`,
+              background:
+                count === 0 ? GRIDLINE : index === peakIndex ? SERIES_HI : SERIES,
+            }}
+          />
+        ))}
+      </div>
+
+      <div className="mt-2 flex justify-between font-mono text-[10px] tabular-nums text-ink-faint">
+        <span>24h ago</span>
+        <span>12h</span>
+        <span>now</span>
+      </div>
     </figure>
   );
 }
