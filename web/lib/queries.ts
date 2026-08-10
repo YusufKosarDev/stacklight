@@ -303,3 +303,22 @@ export async function getStorageStatus(): Promise<StorageStatus> {
 
   return rows[0];
 }
+
+export type NavCounts = { open_groups: number; recent_alerts: number };
+
+/**
+ * The two numbers the sidebar carries, in one round trip.
+ *
+ * Counted rather than derived from listGroups() because the sidebar renders on
+ * every route, including the ones that never load a group list.
+ */
+export async function getNavCounts(): Promise<NavCounts> {
+  const rows = (await sql()`
+    select (select count(*)::int from event_groups
+             where status in ('open', 'regressed'))            as open_groups,
+           (select count(*)::int from alerts
+             where created_at > now() - interval '7 days')     as recent_alerts
+  `) as NavCounts[];
+
+  return rows[0];
+}
