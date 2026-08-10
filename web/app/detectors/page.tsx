@@ -70,20 +70,33 @@ function DetectorCard({ row }: { row: DetectorRow }) {
   );
 }
 
-export default async function Page() {
-  let rows: DetectorRow[] = [];
-  let failed = false;
+/**
+ * Query and its timing together, outside the component.
+ *
+ * Not a style preference: Date.now() in a component body is a call to an impure
+ * function during render, and the lint rules reject it.
+ */
+async function load(): Promise<{
+  rows: DetectorRow[];
+  failed: boolean;
+  ms: number;
+}> {
+  const started = Date.now();
   try {
-    rows = await getDetectorScorecard();
+    const rows = await getDetectorScorecard();
+    return { rows, failed: false, ms: Date.now() - started };
   } catch (error) {
     console.error("scorecard query failed", error);
-    failed = true;
+    return { rows: [], failed: true, ms: Date.now() - started };
   }
+}
 
+export default async function Page() {
+  const { rows, failed, ms } = await load();
   const anyJudged = rows.some((row) => row.judged > 0);
 
   return (
-    <Shell current="detectors">
+    <Shell current="detectors" queryMs={ms}>
       <header className="mb-6">
         <h1 className="text-xl font-semibold tracking-tight text-ink-hi sm:text-2xl">
           Detector scorecard
