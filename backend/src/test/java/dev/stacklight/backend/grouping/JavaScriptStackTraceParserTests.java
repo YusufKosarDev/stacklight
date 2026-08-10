@@ -121,6 +121,34 @@ class JavaScriptStackTraceParserTests {
     }
 
     @Test
+    void treatsSyntheticV8LocationsAsVendor() {
+        // V8 emits a location for frames that have no source file at all: "index 0" for a
+        // frame inside Promise.all, "unknown location" elsewhere. They are not application
+        // code, and counting them as in-app would put a frame that says nothing about this
+        // particular fault into its fingerprint -- and Promise.all appears in every async
+        // stack there is.
+        List<Frame> frames =
+                parser.parse(
+                        """
+                            at total (/app/src/cart.js:10:5)
+                            at async Promise.all (index 0)
+                            at listOnTimeout (node:internal/timers:581:17)
+                        """);
+
+        assertThat(frames).hasSize(3);
+        assertThat(frames.get(0).inApp()).isTrue();
+        assertThat(frames.get(1).inApp()).isFalse();
+        assertThat(frames.get(2).inApp()).isFalse();
+    }
+
+    @Test
+    void stillTreatsARelativeFileNameAsApplicationCode() {
+        // The rule above keys on "no slash and no dot". A bare file name has a dot and
+        // must stay in-app, or a stack trace with relative paths would lose every frame.
+        assertThat(parser.parse("    at total (cart.js:10:5)").get(0).inApp()).isTrue();
+    }
+
+    @Test
     void recognisesItsOwnFormat() {
         assertThat(parser.confidence(NODE_TRACE)).isGreaterThan(50);
         assertThat(parser.confidence("\tat com.example.Foo.bar(Foo.java:42)")).isLessThan(50);
