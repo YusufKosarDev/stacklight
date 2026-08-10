@@ -8,11 +8,14 @@ export function StatTile({
   label,
   value,
   unit,
+  caption,
   meter,
 }: {
   label: string;
   value: string | number;
   unit?: string;
+  /** Small line under the figure. Carries the exact value when the headline is relative. */
+  caption?: string;
   meter?: { fraction: number; caption: string };
 }) {
   return (
@@ -30,6 +33,11 @@ export function StatTile({
         {value}
         {unit && <span className="ml-1 text-sm text-ink-low">{unit}</span>}
       </span>
+      {caption && (
+        <span className="mt-1 block truncate font-mono text-[10px] text-ink-faint">
+          {caption}
+        </span>
+      )}
       {meter && (
         <>
           <div className="mt-3 h-1 overflow-hidden rounded-full bg-edge">
