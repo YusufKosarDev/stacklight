@@ -55,6 +55,23 @@ jobs:
           fi
           echo "no credentials in tree"
 
+      # The whole architecture rests on the dashboard reaching Postgres and nothing
+      # else: that is what lets it render in full while the ingestion service is
+      # asleep. It is measured by hand after every change to the read path, and this
+      # is the part that does not need remembering -- a match here means the bet has
+      # quietly been given up.
+      - name: Read path
+        run: |
+          # "fetch" needs the paren: lib/db.ts describes the driver as SQL-over-fetch
+          # in a comment, and that is the thing being praised, not a call.
+          # package-lock.json is excluded because Next.js pulls undici transitively.
+          pattern='\bfetch[[:space:]]*\(|\baxios\b|node-fetch|\bundici\b|XMLHttpRequest|onrender\.com|render\.com'
+          if git grep -InE "$pattern" -- web ':!web/package-lock.json'; then
+            echo "::error::the dashboard read path reaches outside Postgres"
+            exit 1
+          fi
+          echo "read path talks to Postgres only"
+
   backend:
     name: backend
     runs-on: ubuntu-latest
