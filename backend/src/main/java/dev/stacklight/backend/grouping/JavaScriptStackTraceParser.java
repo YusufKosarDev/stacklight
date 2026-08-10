@@ -170,12 +170,21 @@ public class JavaScriptStackTraceParser implements StackTraceParser {
 
     private static boolean isInApp(String path) {
         String cleaned = path.replace('\\', '/');
-        return !(cleaned.contains("node_modules/")
+        if (cleaned.contains("node_modules/")
                 || cleaned.startsWith("node:")
                 || cleaned.startsWith("internal/")
-                || cleaned.equals("<anonymous>")
                 || cleaned.equals("native")
-                || cleaned.startsWith("<anonymous>"));
+                || cleaned.startsWith("<anonymous>")) {
+            return false;
+        }
+
+        // V8 also emits locations for frames that have no source file behind them at all:
+        // "index 0" inside a Promise.all, "unknown location" elsewhere. Without a slash or
+        // a dot there is no path and no file name, so there is nothing here that belongs
+        // to the application -- and Promise.all turns up in every async stack there is, so
+        // letting it through would add a frame that says nothing about the fault to the
+        // fingerprint of a great many of them.
+        return cleaned.contains("/") || cleaned.contains(".");
     }
 
     /** Removes the {@code new } and {@code async } markers V8 prepends to a call site. */
