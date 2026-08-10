@@ -58,6 +58,7 @@ class StacklightClientTests {
         final List<String> accepted = Collections.synchronizedList(new ArrayList<>());
         /** How many events this transport will take before failing, per attempt. */
         volatile int acceptsPerAttempt = Integer.MAX_VALUE;
+        volatile boolean retryable = true;
         volatile CountDownLatch arrived = new CountDownLatch(0);
 
         @Override
@@ -66,7 +67,11 @@ class StacklightClientTests {
             for (StacklightEvent event : batch) {
                 handed.add(event.eventId());
                 if (delivered >= acceptsPerAttempt) {
-                    return Result.retry("collector stopped answering").after(delivered);
+                    Result outcome =
+                            retryable
+                                    ? Result.retry("collector stopped answering")
+                                    : Result.reject("401");
+                    return outcome.after(delivered);
                 }
                 accepted.add(event.eventId());
                 delivered++;
@@ -139,51 +144,54 @@ class StacklightClientTests {
         }
     }
 
-    @Test
-    void aBatchThatStopsHalfwayOnlyResendsTheHalfThatDidNotArrive() throws Exception {
-        // One event per request means a batch can stop in the middle. Treating that as a
-        // total failure sent the accepted half again, to be told by the collector's
-        // duplicate check that it already had them -- a round trip each to learn nothing,
-        // and with a 429 the retry makes the very problem it is reacting to worse.
-        PerEventTransport transport = new PerEventTransport();
-        transport.acceptsPerAttempt = 3;
-        transport.arrived = new CountDownLatch(1);
+    /** One delivery attempt, with nothing timing-dependent about it. */
+    private record Attempt(EventQueue queue, Dispatcher dispatcher, List<StacklightEvent> batch) {}
 
-        try (StacklightClient client =
-                StacklightClient.start(options().batchSize(10), transport)) {
-            for (int i = 0; i < 8; i++) {
-                client.capture(new IllegalStateException("boom " + i));
-            }
-
-            // Let it recover so the remainder gets through and the run can be totalled.
-            Thread.sleep(200);
-            transport.acceptsPerAttempt = Integer.MAX_VALUE;
-            assertThat(transport.arrived.await(3, TimeUnit.SECONDS)).isTrue();
-
-            // Every event exactly once, and no event handed over twice.
-            assertThat(transport.accepted).hasSize(8).doesNotHaveDuplicates();
-            assertThat(transport.handed).doesNotHaveDuplicates();
+    private static Attempt oneAttempt(Transport transport, int count) {
+        EventQueue queue = new EventQueue(100);
+        for (int i = 0; i < count; i++) {
+            queue.offer(StacklightEvent.message("boom " + i, "ERROR", options()));
         }
+        Dispatcher dispatcher =
+                new Dispatcher(queue, transport, options(), new Logger(false));
+        return new Attempt(queue, dispatcher, queue.drainNow(count));
     }
 
     @Test
-    void aPartialDeliveryStillBalancesTheBooks() throws Exception {
+    void aBatchThatStopsHalfwayOnlyRequeuesThePartThatDidNotArrive() {
+        // One event per request means a batch can stop in the middle. Treating that as a
+        // total failure put the accepted half back too, to be told by the collector's
+        // duplicate check that it already had them -- a round trip each to learn nothing,
+        // and against a 429 the retry feeds the very problem it is reacting to.
+        PerEventTransport transport = new PerEventTransport();
+        transport.acceptsPerAttempt = 3;
+        Attempt attempt = oneAttempt(transport, 8);
+
+        boolean finished = attempt.dispatcher().deliver(attempt.batch(), Duration.ofSeconds(1));
+
+        assertThat(finished).isFalse();
+        assertThat(transport.accepted).hasSize(3);
+        assertThat(attempt.dispatcher().sent()).isEqualTo(3);
+        assertThat(attempt.queue().size()).isEqualTo(5);
+
+        // And back at the front, in order.
+        List<StacklightEvent> requeued = attempt.queue().drainNow(10);
+        assertThat(requeued).extracting(StacklightEvent::eventId).doesNotContainAnyElementsOf(transport.accepted);
+    }
+
+    @Test
+    void aRejectionPartWayThroughOnlyDiscardsWhatWasStillOwed() {
         PerEventTransport transport = new PerEventTransport();
         transport.acceptsPerAttempt = 2;
+        transport.retryable = false;
+        Attempt attempt = oneAttempt(transport, 6);
 
-        try (StacklightClient client =
-                StacklightClient.start(options().batchSize(10), transport)) {
-            for (int i = 0; i < 5; i++) {
-                client.capture(new IllegalStateException("boom " + i));
-            }
-            Thread.sleep(300);
+        boolean finished = attempt.dispatcher().deliver(attempt.batch(), Duration.ofSeconds(1));
 
-            // The invariant the whole client rests on: nothing is unaccounted for, and
-            // what the collector took is counted as sent rather than still owed.
-            StacklightStats stats = client.stats();
-            assertThat(stats.accepted()).isEqualTo(stats.sent() + stats.dropped() + stats.queued());
-            assertThat(stats.sent()).isGreaterThanOrEqualTo(2);
-        }
+        assertThat(finished).isTrue();
+        assertThat(attempt.dispatcher().sent()).isEqualTo(2);
+        assertThat(attempt.dispatcher().givenUp()).isEqualTo(4);
+        assertThat(attempt.queue().size()).isZero();
     }
 
     @Test
