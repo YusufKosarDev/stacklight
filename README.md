@@ -4,11 +4,11 @@ Error ingestion and triage for small services.
 
 **Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
 
-**Status: step 4.** Events are grouped into distinct faults, counted into an
+**Status: step 5.** Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
 otherwise take the project down, watched by three detectors whose relative merits
-are measured rather than assumed, and delivered by clients written around a
-collector that sleeps.
+are measured rather than assumed, delivered by clients written around a collector
+that sleeps, and read through an interface that ships no JavaScript of its own.
 
 ---
 
@@ -451,6 +451,76 @@ re-checked whenever the read path changes.
 
 ---
 
+## The interface
+
+The dashboard is the only part of this project anyone sees, and for four steps it
+looked like what it was: a scaffold. It is now built around a persistent sidebar,
+an overview page of stat tiles and an aggregate trend, and a token set the pages
+share.
+
+The starting point was not a matter of taste. `globals.css` set `font-family:
+Arial` on the body while the layout loaded Geist and applied it nowhere, so
+**every page had been rendering in Arial since the day the project was
+scaffolded.** The same file still carried a light `--background` and a
+`prefers-color-scheme` block for a theme this dashboard never renders. Some of
+what looked like an aesthetic problem was a bug nobody had read the CSS closely
+enough to see.
+
+### It ships no JavaScript of its own
+
+There are no client components — `grep -rn "use client" web/` returns nothing,
+and that is checked rather than remembered. Keeping it that way cost one small
+decision. The obvious way to mark the current nav item is `usePathname()`, which
+would have made this the first client component in the project. Instead each page
+names its own section: `<Shell current="groups">`. A page already knows which
+page it is, and shipping JavaScript to work that out again in the browser is
+paying twice for one fact.
+
+The range switcher on a group page is the same idea from the other direction — it
+was already `?range=` links, so it needed nothing.
+
+### Contrast is measured, not eyeballed
+
+The chart tokens carried a comment claiming a validated 3:1 against the page
+surface. That claim was true of a blue chosen for the old palette, and would have
+been quietly inherited by a violet that had never been checked. Measuring instead
+of inheriting is what caught the real problem:
+
+> A text token drafted at **2.78:1** — dim enough to look tasteful and too dim to
+> read — was about to be used for axis ticks, sidebar captions and the `ignored`
+> badge.
+
+The text ramp is now three steps at 12.10, 7.15 and 5.04, all clear of 4.5:1,
+because every one of them carries words somewhere. The series colours sit at 4.58
+and 6.37. There is no muted series step: emphasis is carried by the current bar
+getting brighter rather than by every other bar going dim, so nothing has to sit
+at 1.89:1 and still be called a mark.
+
+### What looking at it turned up
+
+Four things that a build passing would never have caught, and that reading the
+diff would not have either:
+
+- A sticky table header given the translucent panel surface. Rows would have
+  scrolled visibly through it.
+- The trend chart pinned at `30rem` with 24px bars, which left a seven-day range
+  sitting in the left third of its own panel. Uncapping the bars replaced that
+  with 150px slabs that read as a segmented bar rather than a series, so the cap
+  came back at 48px and the row is centred.
+- A peak label drawn 20px above bars allowed to reach within 4px of the ceiling.
+- A narrow-screen nav that scrolled, hiding its fourth link behind a native
+  scrollbar laid across a dark surface. It wraps now.
+
+### The bet, now stated on every page
+
+The sidebar's foot carries the read-path line: a green dot, the query time for
+the render you are looking at, and *renders whether or not the ingestion service
+is awake*. The claim the whole architecture rests on used to live in a card on
+the front page. It is a permanent part of the frame now, and the number next to
+it is measured per request rather than written down once.
+
+---
+
 ## Connection strategy
 
 Both halves talk to the same database, and they deliberately do it differently.
@@ -495,7 +565,9 @@ backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
   alerting/   outbox, cooldown, best-effort mail delivery
 web/       Next.js 16 App Router, deployed to Vercel
   app/        groups, charts, alerts, detector scorecard, how grouping works
-  lib/        Neon handle and the read queries
+    components/shell/  sidebar, nav counts, the frame every route renders into
+    components/ui/     panel, stat tile, badge
+  lib/        Neon handle, the read queries, the overview derivations
 .githooks/ commit-msg policy, enabled with core.hooksPath
 .github/   CI: policy scan, backend tests, image build, web build
 ```
@@ -714,6 +786,7 @@ running for a scheduler to fire into.
 | Group list, with 24-hour sparklines per group | 0.40–0.58 s warm |
 | Group detail, trend + similarity + frame breakdown | 0.36–0.52 s across all three ranges |
 | Alerts and detector scorecard pages | 0.31–0.72 s |
+| *(the four rows above predate the redesign; re-measured below)* | |
 | First request after a fully idle period | 1.8–3.3 s (see below) |
 | Neon query time from `fra1` | 6–16 ms |
 | Ingestion cold start | **95, 104, 104, 104, 106, 114, 116 s**, measured seven times |
@@ -744,8 +817,44 @@ charts, frame breakdown, fingerprint input, similar groups, alerts and the
 detector scorecard — in under half a second.
 
 That is the architectural bet, tested rather than asserted. A static check backs
-the measurement: nothing under `web/` imports a HTTP client or names the
-ingestion host.
+the measurement: the CI `policy` job greps `web/` for `fetch(`, `axios`,
+`node-fetch`, `undici`, `XMLHttpRequest` and the ingestion host, and fails on a
+match. The measurement is still the real evidence; the grep is the part that does
+not depend on anyone remembering to take it.
+
+### The interface, after the redesign
+
+Measured against production on 10 August 2026, which is the point of putting them
+in a separate table: every number above this line was taken before the dashboard
+was rebuilt.
+
+| Check | Result |
+|---|---|
+| Body font | **Geist** — the Arial fallback is gone |
+| Read-path query, per render | **0.01–0.02 s** across all four pages that run one |
+| End-to-end, warm | 0.32–0.57 s over seven routes, three samples each |
+| Layout, 5 routes × 4 widths | **20 of 20 clean** — no horizontal overflow at 390, 768, 1024 or 1440 |
+| Active nav item | correct on every route, at every width |
+| Client components | **none**, unchanged |
+| Runtime dependencies added | **none** — `package.json` untouched |
+| Build without `DATABASE_URL` | still passes |
+| Text contrast | 12.10, 7.15, 5.04 — the ramp clears 4.5:1 at every step |
+| Chart series contrast | 4.58 and 6.37 against `#09090b` |
+
+The read-path number is worth separating from the end-to-end one. 0.01 s is the
+database query inside the render; 0.32 s is what a browser waits for, and the
+difference is Vercel's function and the network rather than anything this project
+controls. Both are quoted because quoting only the first would flatter the page
+and quoting only the second would hide where the time actually goes.
+
+The redesign also added a query — the sidebar's group and alert counts, on every
+route. It does not show up: the read path measures the same as it did before the
+sidebar existed.
+
+**What this table does not show.** The dashboard has no test suite and the
+redesign did not add one, so nothing here is a regression test. These are
+measurements taken by hand at a point in time, the same as every other table in
+this file.
 
 ### The read path has its own cold start, and it is not free
 
