@@ -117,9 +117,6 @@ public class RetentionService {
                     .param("bytes", bytes)
                     .update();
 
-            eventsSinceSweep.set(0);
-            lastSweep.set(Instant.now());
-
             if (deleted > 0 || windowDays != properties.windowDays()) {
                 log.info(
                         "retention sweep source={} window_days={} deleted={} events_bytes={}",
@@ -135,6 +132,13 @@ public class RetentionService {
             log.warn("retention sweep failed source={}", source, e);
             return 0;
         } finally {
+            // Both triggers are reset by an attempt rather than by a success, so a sweep
+            // that keeps failing backs off exactly like one that worked: the next try
+            // comes after another batch of events or another interval. Resetting them
+            // only on the success path left a broken sweep running -- and logging its own
+            // stack trace -- once per event for as long as it stayed broken.
+            eventsSinceSweep.set(0);
+            lastSweep.set(Instant.now());
             sweeping.set(false);
         }
     }
