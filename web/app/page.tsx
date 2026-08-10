@@ -2,15 +2,20 @@ import Link from "next/link";
 import {
   listGroups,
   listSparklines,
+  listServices,
+  countsByStatus,
+  getOverviewTrend,
   getStorageStatus,
   type GroupSummary,
   type StorageStatus,
 } from "@/lib/queries";
-import { summarise, type OverviewSummary } from "@/lib/overview";
+import { parseFilters, decodeCursor, toQueryString } from "@/lib/group-filters";
+import type { GroupFilters } from "@/lib/group-filters";
 import { relativeTime, bytesParts } from "@/lib/format";
 import { Shell } from "@/app/components/shell/shell";
 import { Panel } from "@/app/components/ui/panel";
 import { StatTile } from "@/app/components/ui/stat-tile";
+import { FilterBar } from "@/app/components/filter-bar";
 import {
   LevelBadge,
   StatusBadge,
@@ -21,31 +26,52 @@ import { Sparkline, OverviewTrend } from "@/app/components/charts";
 /** The plan suspends the project at this point rather than billing for it. */
 const STORAGE_LIMIT = 512 * 1024 * 1024;
 
+/** Enough to scan without scrolling forever; small enough that paging is real. */
+const PAGE_SIZE = 25;
+
 type LoadResult =
   | {
       ok: true;
       groups: GroupSummary[];
+      nextCursor: string | null;
       sparklines: Map<number, number[]>;
+      services: string[];
+      counts: Record<string, number>;
+      trend: { hourly: number[]; total: number };
       storage: StorageStatus;
-      summary: OverviewSummary;
       ms: number;
     }
   | { ok: false; ms: number };
 
-async function load(): Promise<LoadResult> {
+async function load(
+  filters: GroupFilters,
+  after: string | string[] | undefined,
+): Promise<LoadResult> {
   const started = Date.now();
   try {
-    const [groups, sparklines, storage] = await Promise.all([
-      listGroups(),
-      listSparklines(),
+    // Two waves rather than one: the sparklines can only be asked for once the
+    // page's group ids are known. Everything that does not depend on them goes
+    // in the same round trip.
+    const page = await listGroups(filters, decodeCursor(after), PAGE_SIZE);
+    const ids = page.groups.map((group) => group.id);
+
+    const [sparklines, services, counts, trend, storage] = await Promise.all([
+      listSparklines(ids),
+      listServices(),
+      countsByStatus(filters),
+      getOverviewTrend(filters),
       getStorageStatus(),
     ]);
+
     return {
       ok: true,
-      groups,
+      groups: page.groups,
+      nextCursor: page.nextCursor,
       sparklines,
+      services,
+      counts,
+      trend,
       storage,
-      summary: summarise(groups, sparklines),
       ms: Date.now() - started,
     };
   } catch (error) {
@@ -117,9 +143,20 @@ function GroupRow({
   );
 }
 
-export default async function Page() {
-  const result = await load();
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const filters = parseFilters(params);
+  const result = await load(filters, params.after);
   const storage = result.ok ? bytesParts(result.storage.total_bytes) : null;
+
+  const totalGroups = result.ok
+    ? Object.values(result.counts).reduce((sum, n) => sum + n, 0)
+    : 0;
+  const filtered = Boolean(filters.service || filters.status || filters.q);
 
   return (
     <Shell current="groups" queryMs={result.ms}>
@@ -143,9 +180,13 @@ export default async function Page() {
       {result.ok && storage && (
         <>
           <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile label="Open faults" value={result.summary.openCount} />
-            <StatTile label="Events · 24h" value={result.summary.events24h} />
-            <StatTile label="Regressed" value={result.summary.regressedCount} />
+            <StatTile label="Open faults" value={result.counts.open ?? 0} />
+            <StatTile
+              label="Events · 24h"
+              value={result.trend.total}
+              caption={filtered ? "matching this filter" : undefined}
+            />
+            <StatTile label="Regressed" value={result.counts.regressed ?? 0} />
             <StatTile
               label="Storage"
               value={storage.value}
@@ -163,27 +204,26 @@ export default async function Page() {
 
           <Panel className="mb-7">
             <OverviewTrend
-              hourly={result.summary.hourly}
-              total={result.summary.events24h}
+              hourly={result.trend.hourly}
+              total={result.trend.total}
             />
           </Panel>
 
-          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-medium text-ink">Groups</h2>
-            <span className="font-mono text-xs tabular-nums text-ink-low">
-              {result.summary.openCount} open · {result.summary.regressedCount}{" "}
-              regressed · {result.summary.resolvedCount} resolved
-              {result.summary.ignoredCount > 0 &&
-                ` · ${result.summary.ignoredCount} ignored`}
-            </span>
-          </div>
+          <h2 className="mb-3 text-sm font-medium text-ink">Groups</h2>
+
+          <FilterBar
+            filters={filters}
+            services={result.services}
+            counts={result.counts}
+            total={totalGroups}
+          />
 
           {result.groups.length === 0 ? (
             <Panel>
               <p className="text-sm text-ink-low">
-                No groups yet. Send an event to{" "}
-                <code className="font-mono text-ink">POST /api/events</code> on
-                the ingestion service.
+                {filtered
+                  ? "No groups match this filter."
+                  : "No groups yet. Send an event to POST /api/events on the ingestion service."}
               </p>
             </Panel>
           ) : (
@@ -196,6 +236,24 @@ export default async function Page() {
                 />
               ))}
             </ul>
+          )}
+
+          {result.nextCursor && (
+            /*
+              Next only. Going back is the browser's back button, which on a
+              list of GET URLs does exactly the right thing -- a "previous"
+              link would mean either running the sort backwards or carrying a
+              stack of cursors in the URL, for a control the browser already
+              provides.
+            */
+            <div className="mt-4 flex justify-center">
+              <Link
+                href={`/${toQueryString(filters, result.nextCursor)}`}
+                className="rounded-lg border border-edge bg-surface-1 px-4 py-2 text-sm text-ink transition-colors hover:border-edge-strong hover:bg-surface-2"
+              >
+                Older groups →
+              </Link>
+            </div>
           )}
         </>
       )}
