@@ -56,9 +56,17 @@ public class GroupStore {
                                                else event_groups.regressed_in_release end,
                    release_first = coalesce(event_groups.release_first, excluded.release_first),
                    release_last  = coalesce(excluded.release_last, event_groups.release_last)
-            returning id, status
+            returning id, status, event_count, first_seen
             )
-            select upserted.id, upserted.status, existing.status as previous_status
+            select upserted.id,
+                   upserted.status,
+                   existing.status as previous_status,
+                   upserted.event_count,
+                   -- Age drives the new-group rule. RETURNING reports the row after the
+                   -- upsert, so event_count is already this event's, and first_seen is
+                   -- untouched by the conflict arm and therefore still the original.
+                   floor(extract(epoch from (now() - upserted.first_seen)) / 3600)::int
+                       as age_hours
               from upserted left join existing on true
             """;
 
@@ -70,8 +78,11 @@ public class GroupStore {
      *
      * @param previousStatus status before this event landed; null when the group was
      *     created by it
+     * @param eventCount the group's total after this event was counted
+     * @param ageHours whole hours since the group was first seen; 0 for a new one
      */
-    public record Filed(long groupId, String status, String previousStatus) {
+    public record Filed(
+            long groupId, String status, String previousStatus, long eventCount, int ageHours) {
 
         /** True only for the event that ended a group's resolved state. */
         public boolean broughtItBack() {
@@ -113,7 +124,9 @@ public class GroupStore {
                                 new Filed(
                                         rs.getLong("id"),
                                         rs.getString("status"),
-                                        rs.getString("previous_status")))
+                                        rs.getString("previous_status"),
+                                        rs.getLong("event_count"),
+                                        rs.getInt("age_hours")))
                 .single();
     }
 
