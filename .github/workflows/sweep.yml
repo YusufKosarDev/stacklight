@@ -1,0 +1,66 @@
+name: sweep
+
+# The scheduler that lives outside the process.
+#
+# The collector sleeps after fifteen idle minutes, so an in-process timer would
+# fire into nothing. This wakes it instead, and the work runs on a service that
+# is by then running. It exists for the one signal the ingest path cannot
+# produce: a group that was reporting and stopped, which is raised by an event
+# *not* arriving.
+#
+# Hourly rather than every few minutes. Each run wakes the instance and keeps it
+# up for the fifteen minutes Render waits before idling it out, so the cadence is
+# a bill as much as a setting -- and a service woken constantly is no longer a
+# service that sleeps, which is half of what this project demonstrates.
+
+on:
+  schedule:
+    # Seven past, not on the hour: the top of the hour is when every cron on the
+    # platform fires, and the queue there is longer than the job.
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+# One at a time. A run that is still waiting out a cold start should not be
+# joined by the next hour's.
+concurrency:
+  group: sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: sweep
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the collector and sweep
+        env:
+          COLLECTOR_URL: ${{ secrets.COLLECTOR_URL }}
+          INGEST_API_KEY: ${{ secrets.INGEST_API_KEY }}
+        run: |
+          if [ -z "$COLLECTOR_URL" ] || [ -z "$INGEST_API_KEY" ]; then
+            echo "::notice::COLLECTOR_URL or INGEST_API_KEY is not set; nothing to sweep"
+            exit 0
+          fi
+
+          # The first attempt against a sleeping collector is *supposed* to fail.
+          # Cold start was measured at 95 to 116 seconds, and on one of those the
+          # platform returned 503 rather than holding the connection open -- the
+          # same measurement the SDKs were built around, so the same answer:
+          # retry rather than treat one refusal as an outage.
+          for attempt in 1 2 3 4 5; do
+            status=$(curl -sS -o /tmp/sweep.json -w "%{http_code}" \
+                          --max-time 120 -X POST \
+                          -H "X-Stacklight-Key: $INGEST_API_KEY" \
+                          "$COLLECTOR_URL/api/sweep" || echo "000")
+
+            if [ "$status" = "200" ]; then
+              echo "swept on attempt $attempt"
+              cat /tmp/sweep.json
+              exit 0
+            fi
+
+            echo "attempt $attempt: HTTP $status"
+            sleep 30
+          done
+
+          echo "::error::the collector did not answer in five attempts"
+          exit 1

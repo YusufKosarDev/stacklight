@@ -323,7 +323,7 @@ export async function findSimilarGroups(
 export type Alert = {
   id: number;
   group_id: number;
-  kind: "spike" | "new_group" | "regression";
+  kind: "spike" | "new_group" | "regression" | "silence";
   detector: string | null;
   observed: number | null;
   baseline: number | null;

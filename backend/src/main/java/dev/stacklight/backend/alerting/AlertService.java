@@ -55,6 +55,16 @@ public class AlertService {
         return raise(groupId, "regression", Optional.empty());
     }
 
+    /**
+     * Raised when a group that was reporting reliably has stopped.
+     *
+     * <p>The only kind here that nothing on the ingest path can produce, because the
+     * thing being reported is that no event arrived.
+     */
+    public Optional<Long> raiseSilence(long groupId) {
+        return raise(groupId, "silence", Optional.empty());
+    }
+
     private Optional<Long> raise(long groupId, String kind, Optional<Detection> detection) {
         if (alertStore.recentlyAlerted(groupId, cooldownMinutes)) {
             // Deliberately silent. A group in the middle of a spike produces events
