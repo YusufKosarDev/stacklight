@@ -58,10 +58,22 @@ export function statusStyle(status: string) {
   return STATUS_STYLES[status] ?? STATUS_STYLES.open;
 }
 
+/**
+ * Splits the figure from its unit so a caller can set them at different sizes.
+ *
+ * The alternative was slicing the formatted string apart at the call site,
+ * which works right up until a unit gains a character.
+ */
+export function bytesParts(bytes: number): { value: string; unit: string } {
+  if (bytes < 1024) return { value: String(bytes), unit: "B" };
+  if (bytes < 1024 * 1024)
+    return { value: (bytes / 1024).toFixed(0), unit: "KB" };
+  return { value: (bytes / 1024 / 1024).toFixed(1), unit: "MB" };
+}
+
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const { value, unit } = bytesParts(bytes);
+  return `${value} ${unit}`;
 }
 
 export function relativeTime(utcTimestamp: string): string {
