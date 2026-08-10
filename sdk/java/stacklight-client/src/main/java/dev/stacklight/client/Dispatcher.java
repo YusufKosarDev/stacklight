@@ -1,5 +1,6 @@
 package dev.stacklight.client;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
@@ -81,19 +82,31 @@ final class Dispatcher {
             return true;
         }
 
+        // A batch is one request per event, so it can stop in the middle. What the
+        // collector already took is delivered and counted; only the rest is still owed.
+        // Sending the accepted part again would cost a round trip each to be told by the
+        // collector's duplicate check that it already had them, and against a 429 it would
+        // feed the very problem it is reacting to.
+        int accepted = result.deliveredBeforeFailure();
+        if (accepted > 0) {
+            sent.addAndGet(accepted);
+        }
+        List<StacklightEvent> remainder =
+                new ArrayList<>(batch.subList(accepted, batch.size()));
+
         failedAttempts.incrementAndGet();
         lastError.set(result.detail());
 
         if (!result.retryable()) {
-            // Retrying will not change the answer, so the batch is discarded rather than
-            // kept for ever in front of events that could still be delivered.
-            givenUp.addAndGet(batch.size());
-            logger.debug(() -> "discarding " + batch.size() + " events: " + result.detail());
+            // Retrying will not change the answer, so what is left is discarded rather
+            // than kept for ever in front of events that could still be delivered.
+            givenUp.addAndGet(remainder.size());
+            logger.debug(() -> "discarding " + remainder.size() + " events: " + result.detail());
             return true;
         }
 
-        queue.requeueFront(batch);
-        logger.debug(() -> "requeued " + batch.size() + " events: " + result.detail());
+        queue.requeueFront(remainder);
+        logger.debug(() -> "requeued " + remainder.size() + " events: " + result.detail());
         return false;
     }
 
