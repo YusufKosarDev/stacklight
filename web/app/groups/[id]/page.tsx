@@ -60,6 +60,30 @@ function Notice({
   );
 }
 
+/**
+ * Queries and their timing together, outside the component.
+ *
+ * Not a style preference: Date.now() in a component body is a call to an impure
+ * function during render, and the lint rules reject it.
+ *
+ * @returns null when no group has that id, so the caller can call notFound()
+ */
+async function load(groupId: number, range: Range) {
+  const started = Date.now();
+
+  const group = await getGroup(groupId);
+  if (!group) {
+    return null;
+  }
+
+  const [similar, series] = await Promise.all([
+    findSimilarGroups(group.id, group.title),
+    getGroupSeries(group.id, range),
+  ]);
+
+  return { group, similar, series, ms: Date.now() - started };
+}
+
 export default async function GroupPage({
   params,
   searchParams,
@@ -79,21 +103,17 @@ export default async function GroupPage({
     ? (rawRange as Range)
     : "24h";
 
-  const group = await getGroup(groupId);
-  if (!group) {
+  const loaded = await load(groupId, range);
+  if (!loaded) {
     notFound();
   }
-
-  const [similar, series] = await Promise.all([
-    findSimilarGroups(group.id, group.title),
-    getGroupSeries(group.id, range),
-  ]);
+  const { group, similar, series, ms } = loaded;
 
   const frames = group.frames ?? [];
   const inAppCount = frames.filter((frame) => frame.inApp).length;
 
   return (
-    <Shell current="groups">
+    <Shell current="groups" queryMs={ms}>
       <header className="mb-6">
         <div className="flex flex-wrap items-center gap-2">
           <LevelBadge level={group.level} />

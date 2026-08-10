@@ -58,18 +58,28 @@ function AlertRow({ alert }: { alert: Alert }) {
   );
 }
 
-export default async function Page() {
-  let alerts: Alert[] = [];
-  let failed = false;
+/**
+ * Query and its timing together, outside the component.
+ *
+ * Not a style preference: Date.now() in a component body is a call to an impure
+ * function during render, and the lint rules reject it.
+ */
+async function load(): Promise<{ alerts: Alert[]; failed: boolean; ms: number }> {
+  const started = Date.now();
   try {
-    alerts = await listAlerts();
+    const alerts = await listAlerts();
+    return { alerts, failed: false, ms: Date.now() - started };
   } catch (error) {
     console.error("alert query failed", error);
-    failed = true;
+    return { alerts: [], failed: true, ms: Date.now() - started };
   }
+}
+
+export default async function Page() {
+  const { alerts, failed, ms } = await load();
 
   return (
-    <Shell current="alerts">
+    <Shell current="alerts" queryMs={ms}>
       <header className="mb-6">
         <h1 className="text-xl font-semibold tracking-tight text-ink-hi sm:text-2xl">
           Alerts
