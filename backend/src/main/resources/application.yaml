@@ -47,6 +47,13 @@ management:
       enabled: false
 
 stacklight:
+  grouping:
+    # Which algorithm new events are grouped by. Changing this re-partitions
+    # history -- old groups freeze where they are and still-occurring errors open
+    # new ones -- so it moves only after GET /api/grouping/replay?version=N has
+    # been read and the merges and splits it reports were the ones expected.
+    active-version: ${GROUPING_ACTIVE_VERSION:1}
+
   ingest:
     api-key: ${INGEST_API_KEY:}
     # Beyond this many events per hour, a group keeps being counted but stops storing
