@@ -4,11 +4,13 @@ Error ingestion and triage for small services.
 
 **Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
 
-**Status: step 5.** Events are grouped into distinct faults, counted into an
+**Status: step 6.** Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
 otherwise take the project down, watched by three detectors whose relative merits
 are measured rather than assumed, delivered by clients written around a collector
 that sleeps, and read through an interface that ships no JavaScript of its own.
+
+![The overview: stat tiles, the aggregate day, and the group list](docs/screenshots/overview.png)
 
 ---
 
@@ -245,10 +247,48 @@ service is reliably running. The consequences are real and not hidden:
 - A drop to zero cannot be detected at all, by construction. Absence of events
   is absence of triggers.
 
-A scheduler would not fix this. It would fire into a process that is not
-running, which is the failure retention already ran into in step 2 — the
-difference being that retention can catch up on waking, and a missed spike
-cannot be caught up on.
+### The scheduler objection, and where it stops holding
+
+This file used to say a scheduler would not fix any of that, because it would
+fire into a process that is not running. **That is true of a scheduler inside
+the process, and only of that one.** An external caller wakes the service —
+Render starts it on an inbound request — so by the time there is work to do, the
+process is doing it. The two were being treated as the same thing, and they are
+not.
+
+So there is now an hourly trigger from outside, and one signal that could not
+exist before it:
+
+> **A group that was reporting reliably and stopped.** Every other alert here is
+> raised by an event arriving. This one is raised by an event *not* arriving, so
+> nothing on the ingest path can ever see it — absence of events is absence of
+> triggers.
+
+The rule is not "no events lately". With 97% of buckets empty, that describes
+nearly every group nearly always, which is the same trap the spike detectors had
+to be built around. A group qualifies when it produced events in at least six
+separate hours of the window before the quiet period and none at all during it:
+a habit, then a stop. Resolved groups are excluded, because a resolved group
+going quiet is the fix working, and alerting on it would make the reward for
+fixing something a message saying it stopped happening.
+
+What the external trigger does **not** fix is the latency above. Detection still
+runs on arrival, the wake still takes about a hundred seconds, and an hourly
+sweep means silence is noticed within the hour rather than the minute.
+
+**It is not free, either.** Each wake keeps the instance up for the fifteen
+minutes Render waits before idling it out, which is roughly a 25% duty cycle,
+and a service woken constantly stops being a service that sleeps — which is half
+of what this project demonstrates. Hourly is the compromise; the measured cost
+goes in the table below once it has run long enough to have one.
+
+```
+POST /api/sweep     silence check, retention, scoring, then delivery
+```
+
+Triggered by a GitHub Actions cron that retries five times, because the first
+attempt against a sleeping collector is expected to fail — the same measurement
+the clients were built around, so it gets the same answer.
 
 ---
 
@@ -403,9 +443,54 @@ The cost is real and worth stating plainly: after a version bump, an error that
 is still happening opens a new group while the old one stops growing. That is
 visible noise, which is why the active version changes rarely and on purpose.
 
-What makes the change safe to plan is that every group stores the exact text
-that was hashed. A future version can be run over those stored inputs offline to
-produce a merge-and-split report before it is ever made active.
+What makes the change safe to plan is a report produced before anything moves.
+
+### The report, and a claim this file used to make
+
+Earlier versions of this file said a new algorithm could be replayed over the
+stored `fingerprint_input`. **It cannot, and the reason is worth keeping.** That
+column holds the *output* of the version that wrote it: frames already parsed,
+already filtered to in-app. A version that changes parsing, or which frames
+count — most of what a new version would want to change — cannot be recomputed
+from it.
+
+So the replay reads raw stack traces from `events` and runs the real
+fingerprinter over them, which is exact. It pays for that in coverage: retention
+deletes traces after fourteen days, and events over the hourly cap never stored
+one. The report says how many groups it could actually speak for, so a merge it
+does not mention can be told from one it could not see.
+
+```
+GET /api/grouping/replay?version=2
+```
+
+Returns the merges — one candidate fingerprint absorbing several existing groups
+— the splits, and the coverage. A test replays the *active* version over its own
+events and asserts it reports nothing; without that control the report would be
+measuring the replay rather than the version.
+
+### What version 2 changes, and why it is not switched on yet
+
+Written and tested. It moves two things in opposite directions on purpose, so
+the report has something to show:
+
+- **Three in-app frames decide identity, not eight.** Eight makes a fingerprint
+  a description of the whole call path rather than of the fault, so one bug
+  reached from two places becomes two groups. Three rather than one, because the
+  top frame is often a shared helper that throws for unrelated reasons.
+- **A frame keeps the file it came from** when the declaring class is a scope
+  rather than a location. `Object.<anonymous>` in two unrelated JavaScript entry
+  files is one signature under v1, and they are not the same frame. Java frames
+  are untouched: `CartService.java` says nothing `com.example.CartService` has
+  not already said.
+
+V2 carries its own signature function rather than editing the one v1 hashes.
+Editing that would change what v1 produces for events arriving tomorrow, which
+is exactly the silent re-pointing the version key exists to prevent.
+
+`stacklight.grouping.active-version` still reads 1. It moves once the report has
+been run against production and the merges and splits it lists are the ones
+expected — which is the entire point of having built the report first.
 
 ### Similar groups
 
@@ -519,6 +604,39 @@ is awake*. The claim the whole architecture rests on used to live in a card on
 the front page. It is a permanent part of the frame now, and the number next to
 it is measured per request rather than written down once.
 
+### Filtering, searching and paging — still without JavaScript
+
+The list was one query with `limit 100` and no way to narrow it. Fine at nine
+groups and useless at nine hundred. It now filters by service and status,
+searches titles, and pages — and none of that cost the zero-JavaScript property,
+because all of it is URL state: the filter is a plain `<form method="get">`, the
+status chips and the pager are links, and every view is a URL that can be
+bookmarked and shared.
+
+**Keyset, not offset.** An offset re-counts the rows it skips and, on a list
+ordered by recency, skips or repeats rows whenever an event arrives between one
+page and the next — which on this list is constantly. The cursor keeps
+microseconds, because `last_seen` is displayed to the second and a cursor
+truncated the same way sits exactly on a row boundary.
+
+There is no "previous" link. Going back is the browser's back button, which on a
+list of GET URLs does the right thing already; the alternative is running the
+sort backwards or carrying a stack of cursors in the URL, for a control that
+already exists.
+
+**Paging changed what the numbers mean, which is the part worth watching for.**
+The tiles and the trend used to be summed in JavaScript from every group's
+sparkline. With a page of twenty-five that would quietly have become "events on
+this page" while still being labelled *Events · 24h*. They are aggregate queries
+now: one round trip each, independent of how many groups exist. The per-row
+sparklines ask only for the ids on screen.
+
+The status counts on the chips deliberately ignore the status filter while
+respecting the others. A count that collapsed to the status already selected
+would stop being a way to navigate.
+
+![A group page: the fingerprint input, the frame breakdown, and the trend](docs/screenshots/group.png)
+
 ---
 
 ## Connection strategy
@@ -558,18 +676,20 @@ exactly the reason above.
 
 ```
 backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
-  grouping/   parsers, normalizer, fingerprinters, version registry
-  ingest/     endpoint, guard, event / group / rollup persistence, status
+  grouping/   parsers, normalizer, two fingerprinter versions, replay report
+  ingest/     endpoint, guard, event / group / rollup persistence, status, sweep
   retention/  sweep, adaptive window, startup catch-up
-  detection/  three detectors, shadow recording, self-scoring
+  detection/  three detectors, shadow recording, self-scoring, silence
   alerting/   outbox, cooldown, best-effort mail delivery
 web/       Next.js 16 App Router, deployed to Vercel
   app/        groups, charts, alerts, detector scorecard, how grouping works
     components/shell/  sidebar, nav counts, the frame every route renders into
     components/ui/     panel, stat tile, badge
-  lib/        Neon handle, the read queries, the overview derivations
+  lib/        Neon handle, the read queries, the list's URL state
+  test/       node --test over the pure logic, no runner installed
 .githooks/ commit-msg policy, enabled with core.hooksPath
-.github/   CI: policy scan, backend tests, image build, web build
+.github/   CI: policy scan, backend and web tests, image build, web build
+           sweep: the hourly trigger that wakes the collector
 ```
 
 Grouping and rollup both run inline on the ingest path rather than behind a
@@ -614,6 +734,14 @@ retrying a delivery it already made cannot inflate it:
   "fingerprint": "b2b9c15ea9557bba93353505c471e919", "groupId": 1 }
 ```
 
+`POST /api/sweep` — the work that has to happen when nothing is happening: the
+silence check, a retention pass, a scoring pass, then delivery. Requires the same
+header. Called hourly by a GitHub Actions cron rather than an in-process timer,
+for the reason above.
+
+`GET /api/grouping/replay?version=N` — what version N would do to the groups that
+already exist. Read-only.
+
 `GET /actuator/health` — no authentication, no database access.
 
 ---
@@ -624,12 +752,25 @@ retrying a delivery it already made cannot inflate it:
 git config core.hooksPath .githooks   # once per clone
 
 cd backend && ./mvnw verify           # needs a running Docker daemon
-cd web && npm ci && npm run dev
+cd web && npm ci && npm test && npm run dev
 ```
 
 Backend tests start a real PostgreSQL 17 through Testcontainers and run the
 actual Flyway migration, so schema and SQL problems surface locally instead of
 on Neon.
+
+The dashboard's tests run on `node --test` against TypeScript directly, which
+Node 24 does without a compile step. **No test runner is installed** — the
+dependency list is part of what this project is, and a runner would have been the
+first thing in it. The cost is two constraints worth knowing before adding a
+test: imports need a relative path and an explicit `.ts` extension, because
+Node's type stripping resolves neither a bare specifier nor the `@/` alias; and
+that in turn needs `allowImportingTsExtensions`, or `tsc` rejects what Node
+requires.
+
+What is covered is the pure logic — the list's URL state, the cursor, the
+formatting. What is not is anything that renders, which would need a DOM and
+therefore a dependency. That line is drawn on purpose rather than by neglect.
 
 `npm run build` deliberately succeeds without `DATABASE_URL`: the dashboard must
 never reach the database at build time, and CI enforces it.
@@ -645,8 +786,9 @@ shape.
 | Service | Key |
 |---|---|
 | Render | `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, `INGEST_API_KEY`, `JAVA_TOOL_OPTIONS` |
-| Render, optional | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE` |
+| Render, optional | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
 | Vercel | `DATABASE_URL` |
+| GitHub secrets | `COLLECTOR_URL`, `INGEST_API_KEY` — the hourly sweep no-ops without them, so a fork does not fail every hour |
 
 Render sets `PORT` itself, and the application reads it.
 
@@ -851,10 +993,54 @@ The redesign also added a query — the sidebar's group and alert counts, on eve
 route. It does not show up: the read path measures the same as it did before the
 sidebar existed.
 
-**What this table does not show.** The dashboard has no test suite and the
-redesign did not add one, so nothing here is a regression test. These are
+**What this table does not show.** Nothing here is a regression test. These are
 measurements taken by hand at a point in time, the same as every other table in
 this file.
+
+### The list, once it could be filtered
+
+Also production, 10 August 2026.
+
+| Check | Result |
+|---|---|
+| Filter by status, service, title search | correct counts on each, chips recount to match |
+| An invented status (`?status=banana`) | falls back to unfiltered rather than an empty page |
+| A malformed cursor (`?after=nonsense`) | falls back to page one, no error surfaced |
+| Walking the whole list three at a time | 3 pages, **9 unique groups, no repeats**, stops in the right place |
+| A filter carried into page two | 3 + 3 + 2 = 8 open, nothing else leaked in |
+| Layout with the filter bar, 2 URLs × 4 widths | 8 of 8 clean |
+
+The pagination numbers were taken with the page size temporarily lowered to
+three. Nine groups against a page of twenty-five would never have produced a
+second page, and a cursor that has never been followed is a cursor that has never
+been tested.
+
+### What is built and not yet switched on
+
+Two things in this round are complete, tested and deliberately inactive, because
+turning them on needs something this repository does not contain.
+
+| | Waiting on |
+|---|---|
+| **Grouping v2** | the replay report, run against production. `active-version` stays at 1 until the merges and splits it lists are the ones expected |
+| **The hourly sweep** | `COLLECTOR_URL` and `INGEST_API_KEY` as repository secrets. Without them the workflow exits cleanly rather than failing |
+
+Neither is a loose end left by accident. The version moves on evidence by design,
+and the collector's address is deliberately absent from this repository — the CI
+`policy` job fails the build if it appears anywhere under `web/`, which is what
+keeps the read path honest.
+
+### Tests, as they stand
+
+| Suite | Count | Runner |
+|---|---|---|
+| Backend | **162** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
+| Node SDK | **26** | `node --test` |
+| Dashboard | **16** | `node --test` on TypeScript, no runner installed |
+
+The dashboard's count is the honest weak spot: it covers pure logic and nothing
+that renders, because rendering tests need a DOM and therefore a dependency.
 
 ### The read path has its own cold start, and it is not free
 

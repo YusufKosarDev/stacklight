@@ -1,7 +1,7 @@
 import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 
-import { bytesParts, formatBytes, relativeTime } from "../lib/format.ts";
+import { bytesParts, relativeTime } from "../lib/format.ts";
 
 test("bytes stay in bytes below a kilobyte", () => {
   assert.deepEqual(bytesParts(0), { value: "0", unit: "B" });
@@ -19,12 +19,6 @@ test("kilobytes are whole and megabytes carry one decimal", () => {
   // split has to survive: "8.1" and "MB", never "8.1 MB" as one string.
   assert.deepEqual(bytesParts(1536), { value: "2", unit: "KB" });
   assert.deepEqual(bytesParts(8.5 * 1024 * 1024), { value: "8.5", unit: "MB" });
-});
-
-test("formatBytes is the two parts with a space, and nothing else", () => {
-  assert.equal(formatBytes(0), "0 B");
-  assert.equal(formatBytes(2048), "2 KB");
-  assert.equal(formatBytes(512 * 1024 * 1024), "512.0 MB");
 });
 
 /** The timestamp shape every query in lib/queries.ts produces via to_char. */
