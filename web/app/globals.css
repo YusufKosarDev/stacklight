@@ -15,10 +15,16 @@
   --color-edge: #1f1f28;
   --color-edge-strong: #2a2a36;
 
+  /*
+   * Three text steps, all of which carry words somewhere, so all of them clear
+   * 4.5:1 against the surface above. Measured, not eyeballed: 17.05, 12.10,
+   * 7.15 and 5.04. The first draft had a fourth step at 2.78 for axis ticks and
+   * captions -- dim enough to look tasteful and too dim to read.
+   */
   --color-ink-hi: #ededf2;
   --color-ink: #c9c9d2;
-  --color-ink-low: #7a7a88;
-  --color-ink-faint: #57575f;
+  --color-ink-low: #9a9aa6;
+  --color-ink-faint: #7f7f8c;
 
   --color-accent: #7c5cff;
   --color-accent-hi: #9b7cff;
