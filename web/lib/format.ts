@@ -21,11 +21,6 @@ export function bytesParts(bytes: number): { value: string; unit: string } {
   return { value: (bytes / 1024 / 1024).toFixed(1), unit: "MB" };
 }
 
-export function formatBytes(bytes: number): string {
-  const { value, unit } = bytesParts(bytes);
-  return `${value} ${unit}`;
-}
-
 export function relativeTime(utcTimestamp: string): string {
   const then = new Date(utcTimestamp.replace(" ", "T") + "Z").getTime();
   const seconds = Math.round((Date.now() - then) / 1000);

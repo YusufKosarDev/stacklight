@@ -360,18 +360,6 @@ export async function listAlerts(limit = 50): Promise<Alert[]> {
   `) as Alert[];
 }
 
-export async function listAlertsForGroup(groupId: number): Promise<Alert[]> {
-  return (await sql()`
-    select a.id, a.group_id, a.kind, a.detector, a.observed, a.baseline, a.score,
-           a.title, a.delivery_state, a.delivery_attempts, a.last_error,
-           g.service,
-           to_char(a.created_at at time zone 'utc', ${UTC}) as created_at
-      from alerts a join event_groups g on g.id = a.group_id
-     where a.group_id = ${groupId}
-     order by a.created_at desc
-     limit 10
-  `) as Alert[];
-}
 
 /**
  * How each detector has actually done, on identical data.
