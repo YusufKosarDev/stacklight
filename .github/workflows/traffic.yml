@@ -26,15 +26,26 @@ on:
     - cron: "20 * * * *"
   workflow_dispatch:
 
-# One at a time. An hour still waiting out a cold start should not be joined by the next.
+# One at a time, and the newest wins.
+#
+# The sweep queues instead, because a sweep that is still waiting out a cold start is
+# doing the work and should be left to finish. This is the opposite case: an hour's
+# traffic is only worth sending during that hour, so a run still going when the next one
+# arrives has already missed its window and is in the way. Letting it queue would stall
+# every hour behind it -- which is what happened when the first run hung, held the group,
+# and could not be cancelled by either the API or the force endpoint.
 concurrency:
   group: traffic
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   traffic:
     name: traffic
     runs-on: ubuntu-latest
+    # A cold start is a hundred seconds and five services take a few more. Anything past
+    # twenty minutes is stuck, and the default six hours is long enough to swallow a
+    # thirty-hour schedule whole.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
