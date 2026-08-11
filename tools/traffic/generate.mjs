@@ -107,6 +107,20 @@ function faultFor(service) {
   return error;
 }
 
+/**
+ * Keeps the event loop alive while the client is waiting.
+ *
+ * The client unrefs the timer it backs off on, which is correct of it: a reporter must
+ * never be the reason a host application stays up. This process has no host application,
+ * so during a backoff there is nothing referenced left, the loop drains, and Node exits
+ * with code 13 for an unsettled top-level await -- ten seconds into a wake that takes a
+ * hundred. The fault is this file's for having nothing else to do, not the client's.
+ */
+function holdTheLoopOpen() {
+  const timer = setInterval(() => {}, 60_000);
+  return () => clearInterval(timer);
+}
+
 async function main() {
   const hour = forcedHour !== null ? forcedHour : hourIndex();
   const work = plan(hour);
@@ -138,6 +152,17 @@ async function main() {
     return 0;
   }
 
+  let failed = false;
+  const release = holdTheLoopOpen();
+  try {
+    failed = await send(work, endpoint, apiKey);
+  } finally {
+    release();
+  }
+  return failed ? 1 : 0;
+}
+
+async function send(work, endpoint, apiKey) {
   let failed = false;
 
   for (const { service, count } of work) {
@@ -175,7 +200,7 @@ async function main() {
     if (!ok) failed = true;
   }
 
-  return failed ? 1 : 0;
+  return failed;
 }
 
 process.exitCode = await main();
