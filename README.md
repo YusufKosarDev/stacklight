@@ -231,9 +231,57 @@ Without mail configured, alerts are recorded as `disabled` rather than queued �
 so setting mail up later does not fire a backlog of everything that ever
 happened.
 
-One alert per group per cooldown. A group in the middle of a spike produces
-events continuously, and an alert per event is how a mailbox teaches somebody to
-filter the whole feature into a folder they never open.
+One alert per group **per kind** per cooldown. A group in the middle of a spike
+produces events continuously, and an alert per event is how a mailbox teaches
+somebody to filter the whole feature into a folder they never open.
+
+### Two cooldowns, because the kinds are not raised the same way
+
+| Kind | Raised by | Cooldown |
+|---|---|---|
+| `spike`, `new_group`, `regression` | an event arriving | **60 minutes** |
+| `silence` | a sweep, every three hours | **24 hours** |
+
+This is a difference in **cadence, not severity**, and the single shared cooldown
+was quietly broken for one of them.
+
+The event-driven kinds repeat as fast as events do — many a minute during a
+burst — so an hour holds back a great deal. Silence is raised by a sweep that
+runs every three hours, so by the time anything asks again the previous alert is
+always three hours old and an hour-long cooldown has expired. It suppressed
+nothing whatsoever: the group was still quiet, still qualified, and got a fresh
+alert on **every sweep**. The cooldown was not the wrong idea, it was measuring
+against a cadence this kind does not have.
+
+**Why a day is the right number rather than a round one.** The rule that finds a
+silent group also stops finding it. Qualifying needs six busy hours inside a
+24-hour window ending three hours ago, so as the quiet continues those busy hours
+slide out of the window — and since the sixth-newest of them sits at best five
+hours before the last event, a group stops qualifying **19 hours** after it went
+quiet, whatever its history looked like. The first alert cannot be raised before
+the three-hour mark, so a 24-hour cooldown runs to at least 27 hours: past the
+point where the group has already dropped out of the query by itself.
+
+The two mechanisms therefore never race, and **a silence episode produces exactly
+one alert** as a property of the arithmetic rather than a hope. A test walks eight
+sweeps at three-hour spacing — a full day of a group staying quiet — and asserts
+the count never leaves one.
+
+**The cooldown is per kind, not per group, and that is load-bearing.** A group
+that errors heavily and then dies raises both: the spike, then the silence. The
+second is the half worth waking up for, and a check that ignored the kind would
+let the spike swallow it — a spike raised an hour ago sits inside the silence
+cooldown and would have read as "already reported". The kinds are different
+stories, and a cooldown suppresses a repeat of the same one.
+
+**What happens when a group goes quiet, returns, and goes quiet again inside the
+same day** is decided rather than left to fall out: the cooldown holds and the
+second episode is not reported. A reporter that flaps in and out is one story,
+not two, and once a day is the right ceiling for telling it.
+
+`SILENCE_COOLDOWN_MINUTES` overrides the day. It is the setting to revisit if the
+sweep cadence ever changes, since the whole argument above is built on the
+interval between sweeps.
 
 ### ⚠️ Alert latency, stated plainly
 
@@ -1118,7 +1166,7 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **162** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Backend | **166** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
 | Dashboard | **16** | `node --test` on TypeScript, no runner installed |
