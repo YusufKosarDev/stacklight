@@ -8,20 +8,39 @@ name: sweep
 # produce: a group that was reporting and stopped, which is raised by an event
 # *not* arriving.
 #
-# Hourly rather than every few minutes. Each run wakes the instance and keeps it
-# up for the fifteen minutes Render waits before idling it out, so the cadence is
-# a bill as much as a setting -- and a service woken constantly is no longer a
-# service that sleeps, which is half of what this project demonstrates.
+# Every three hours rather than every few minutes. Each run wakes the instance and
+# keeps it up for the fifteen minutes Render waits before idling it out, so the
+# cadence is a bill as much as a setting -- and a service woken constantly is no
+# longer a service that sleeps, which is half of what this project demonstrates.
+#
+# It was hourly. The cadence is set by Render's quota rather than by what the
+# signal deserves: 750 instance-hours a month are shared across every free service
+# in the workspace, and hourly wakes spent 208 of them -- more than a quarter of
+# the allowance on a service whose dashboard does not need it running at all.
+# Three-hourly spends about 69.
+#
+# What that costs is latency, and only latency. A group is not judged the moment
+# it goes quiet; it is judged when a sweep looks. So the delay between a reporter
+# dying and an alert grows from at most one hour to at most three.
+#
+# It costs no coverage, because the thing being tested is a level rather than an
+# edge. "No events in the last three hours" stays true for as long as the group
+# stays quiet, so a sweep that arrives late still finds it true. A group with a
+# genuine habit qualifies for roughly sixteen hours before its busy hours age out
+# of the 24-hour window, and three-hourly sampling enters that window about five
+# times. What a slower cadence really loses is a silence that starts and ends
+# between two sweeps -- and a reporter that comes back by itself within three
+# hours is not the failure this alert exists for.
 
 on:
   schedule:
     # Seven past, not on the hour: the top of the hour is when every cron on the
     # platform fires, and the queue there is longer than the job.
-    - cron: "7 * * * *"
+    - cron: "7 */3 * * *"
   workflow_dispatch:
 
 # One at a time. A run that is still waiting out a cold start should not be
-# joined by the next hour's.
+# joined by the next one.
 concurrency:
   group: sweep
   cancel-in-progress: false

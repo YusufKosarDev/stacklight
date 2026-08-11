@@ -35,9 +35,14 @@ import org.springframework.web.bind.annotation.RestController;
  * Waking is not free. Each call spends instance-hours on Render and CU-hours on Neon, and
  * a service woken often enough stops being a service that sleeps — which weakens the
  * demonstration this project is partly built to make, even though it leaves the
- * architecture untouched. Hourly is the compromise: quiet enough that the service is
- * genuinely asleep most of the time, frequent enough that a dead reporter is noticed
- * within the hour.
+ * architecture untouched.
+ *
+ * <p>The caller runs every three hours. That is set by Render's quota rather than by what
+ * the signal deserves: 750 instance-hours a month are shared across every free service in
+ * the workspace, and each wake costs the cold start plus the fifteen minutes Render waits
+ * before idling the instance out again. Hourly spent 208 of those hours; three-hourly
+ * spends about 69, for a signal whose condition stays true while the group stays quiet and
+ * so does not need to be sampled often to be seen.
  *
  * <p>Under {@code /api}, so the shared-secret filter already guards it.
  */
