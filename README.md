@@ -220,6 +220,52 @@ detectors against each other on identical data, which is the question being
 asked. They are shown unfiltered, including where a shadow beats the detector in
 charge.
 
+### ⚠️ The traffic behind those numbers is generated, not real
+
+**Nobody uses this deployment.** For four steps that left the scorecard on three
+judged buckets with all three detectors at 100%, which is not a comparison — it
+is three detectors agreeing about the same three obvious spikes. The choice of
+`poisson` rested on an argument about the shape of count data, and the argument
+had nothing to test it.
+
+So the traffic is written rather than collected. `tools/traffic/` holds a
+thirty-hour schedule played against the wall clock by an hourly workflow, and
+this section exists so that no number further down this file can be mistaken for
+something a user did.
+
+Two things constrain how honest that can be. Rollup buckets are written as
+`date_trunc('hour', now())`, so history cannot be back-filled and the scenario
+has to be played in real time rather than seeded. And a generated scenario can
+only be as good as its author's guesses about which shapes are hard.
+
+**What it deliberately does contain:** six services on both platforms, one
+recurring fault each, messages carrying the values the normalizer is supposed to
+strip, and profiles chosen so the detectors have somewhere to disagree.
+
+| Service | Shape | Aimed at |
+|---|---|---|
+| `checkout-api` | flat and steady, with modest rises | `zscore` — the observed spread collapses onto the sigma floor |
+| `search-indexer` | idle three hours, then forty | `zscore` — a bursty group desensitises the detector watching it |
+| `media-transcoder` | quiet, then a routine peak of forty | `poisson` — a normal Tuesday sits deep in the upper tail |
+| `notification-worker` | a ramp that levels off | `poisson` — the flat mean lags a rising trend |
+| `payments-api` | calm, with two unmistakable spikes | the control: all three should agree |
+| `session-store` | busy for half a day, then dead | `ewma` — twelve quiet hours decay the baseline to the floor |
+
+**Two of the six aim at the detector currently in charge.** A scenario that only
+embarrassed the alternatives would be worth nothing as evidence for keeping
+`poisson`, and the point of the exercise is to find out rather than to confirm.
+
+The schedule is data, so what it should produce was worked out before it was
+sent: `tools/traffic/simulate.mjs` runs the same three detectors and the same
+scoring rule over the schedule offline. That prediction is kept honest by being
+written down here **before** the live numbers, so a run that produces no
+disagreement can be told apart from a scenario that was never capable of
+producing any.
+
+Its tests are about what the schedule must not do — exceed the collector's
+per-group hourly cap, outgrow the storage budget, or keep waking a free instance
+after its thirty hours are up.
+
 ### Alert delivery
 
 An alert is a row before it is an email. It is written in the same transaction
@@ -1131,6 +1177,36 @@ The pagination numbers were taken with the page size temporarily lowered to
 three. Nine groups against a page of twenty-five would never have produced a
 second page, and a cursor that has never been followed is a cursor that has never
 been tested.
+
+### The detector comparison: predicted before it was run
+
+The scenario in `tools/traffic/` was designed against the detectors rather than
+against a hope, so what it should produce could be worked out before a single
+event was sent. This table is that prediction, written down first on purpose. The
+measured result goes beside it once the thirty hours are up, and the gap between
+the two is worth as much as either.
+
+Produced by `node tools/traffic/simulate.mjs`, which runs the same three
+detectors and the same scoring statement over the schedule offline.
+
+| Detector | Precision | Recall | TP | FP | FN | TN |
+|---|---|---|---|---|---|---|
+| `ewma` | 64% | 100% | 7 | 4 | 0 | 85 |
+| `zscore` | 33% | 29% | 2 | 4 | 5 | 85 |
+| `poisson` *(active)* | 41% | 100% | 7 | 10 | 0 | 79 |
+
+96 judged buckets against the 3 the scorecard had before, and 18 hours where the
+three disagree.
+
+**The prediction does not favour the incumbent, and that is the point.** It has
+`poisson` matching `ewma` on recall and losing to it on precision, because two
+of the six profiles are aimed at exactly the weakness this file has always
+claimed it has: a rate-based detector over-fires on a group that is genuinely
+erratic, and again on one whose trend the flat mean has not caught up with. If
+the live run agrees, the active detector changes. The measurement is the
+argument, or there was no reason to build the scorecard.
+
+*(Live result pending: the schedule runs to 2026-08-12T21:00Z.)*
 
 ### What is built and not yet switched on
 
