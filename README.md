@@ -256,8 +256,8 @@ Render starts it on an inbound request — so by the time there is work to do, t
 process is doing it. The two were being treated as the same thing, and they are
 not.
 
-So there is now an hourly trigger from outside, and one signal that could not
-exist before it:
+So there is now a trigger from outside, and one signal that could not exist
+before it:
 
 > **A group that was reporting reliably and stopped.** Every other alert here is
 > raised by an event arriving. This one is raised by an event *not* arriving, so
@@ -273,14 +273,8 @@ going quiet is the fix working, and alerting on it would make the reward for
 fixing something a message saying it stopped happening.
 
 What the external trigger does **not** fix is the latency above. Detection still
-runs on arrival, the wake still takes about a hundred seconds, and an hourly
-sweep means silence is noticed within the hour rather than the minute.
-
-**It is not free, either.** Each wake keeps the instance up for the fifteen
-minutes Render waits before idling it out, which is roughly a 25% duty cycle,
-and a service woken constantly stops being a service that sleeps — which is half
-of what this project demonstrates. Hourly is the compromise; the measured cost
-goes in the table below once it has run long enough to have one.
+runs on arrival, the wake still takes about a hundred seconds, and a three-hourly
+sweep means silence is noticed within three hours rather than within the minute.
 
 ```
 POST /api/sweep     silence check, retention, scoring, then delivery
@@ -289,6 +283,45 @@ POST /api/sweep     silence check, retention, scoring, then delivery
 Triggered by a GitHub Actions cron that retries five times, because the first
 attempt against a sleeping collector is expected to fail — the same measurement
 the clients were built around, so it gets the same answer.
+
+### What the trigger costs, and why the cadence is what it is
+
+**It is not free, and the bill is the reason it runs every three hours rather
+than every hour.** This is a real operating constraint rather than a tuning
+preference, so it belongs in the open.
+
+Render's free tier gives **750 instance-hours a month to the workspace, not to
+the service** — every free service in the account draws from the same allowance,
+and running out suspends all of them until the first of the next month. There is
+no overage bill to absorb it; the services simply stop.
+
+The arithmetic is unkind. A wake costs the 104-second cold start plus the fifteen
+minutes Render waits before idling the instance out again — about 16.7 minutes,
+whether the sweep found anything or not.
+
+| Cadence | Wakes/day | Duty cycle | Hours/month |
+|---|---|---|---|
+| Hourly | 24 | 27.9% | **208** |
+| **Three-hourly** | 8 | **9.3%** | **69** |
+| Six-hourly | 4 | 4.7% | 35 |
+
+At hourly, this service alone claimed more than a quarter of the workspace
+allowance — and it claimed it to keep a dashboard current that does not need the
+service running at all. That is the wrong thing to spend a quota on. Three-hourly
+buys the same signal for a third of the price.
+
+**What the slower cadence costs is latency, and only latency.** The condition
+being tested is a level rather than an edge: "no events in the last three hours"
+stays true for as long as the group stays quiet, so a sweep that arrives later
+still finds it true. A group with a genuine habit keeps qualifying for roughly
+sixteen hours before its busy hours age out of the 24-hour window, and
+three-hourly sampling enters that window about five times. What is genuinely lost
+is a silence that begins and ends between two sweeps — and a reporter that
+recovers by itself inside three hours is not the failure this alert exists for.
+
+A service woken constantly also stops being a service that sleeps, which is half
+of what this project demonstrates. The quota and the demonstration happen to want
+the same thing here, but the quota is what decided it.
 
 ---
 
@@ -689,7 +722,7 @@ web/       Next.js 16 App Router, deployed to Vercel
   test/       node --test over the pure logic, no runner installed
 .githooks/ commit-msg policy, enabled with core.hooksPath
 .github/   CI: policy scan, backend and web tests, image build, web build
-           sweep: the hourly trigger that wakes the collector
+           sweep: the three-hourly trigger that wakes the collector
 ```
 
 Grouping and rollup both run inline on the ingest path rather than behind a
@@ -736,8 +769,8 @@ retrying a delivery it already made cannot inflate it:
 
 `POST /api/sweep` — the work that has to happen when nothing is happening: the
 silence check, a retention pass, a scoring pass, then delivery. Requires the same
-header. Called hourly by a GitHub Actions cron rather than an in-process timer,
-for the reason above.
+header. Called every three hours by a GitHub Actions cron rather than an
+in-process timer, for the reason above.
 
 `GET /api/grouping/replay?version=N` — what version N would do to the groups that
 already exist. Read-only.
@@ -788,7 +821,7 @@ shape.
 | Render | `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, `INGEST_API_KEY`, `JAVA_TOOL_OPTIONS` |
 | Render, optional | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
 | Vercel | `DATABASE_URL` |
-| GitHub secrets | `COLLECTOR_URL`, `INGEST_API_KEY` — the hourly sweep no-ops without them, so a fork does not fail every hour |
+| GitHub secrets | `COLLECTOR_URL`, `INGEST_API_KEY` — the sweep no-ops without them, so a fork does not fail every three hours |
 
 Render sets `PORT` itself, and the application reads it.
 
@@ -904,6 +937,42 @@ minutes, took 104 seconds to come back, and swept without anybody asking — whi
 is the arm of the design that a scheduler cannot have, because there is nothing
 running for a scheduler to fire into.
 
+### The external trigger, once it was wired
+
+Measured 11 August 2026, the first time `POST /api/sweep` was called by anything
+other than a hand.
+
+| Check | Result |
+|---|---|
+| Collector state when the trigger fired | asleep — 50 minutes since the last request |
+| Cold start, from the workflow's own timestamps | **104.4 s**, succeeded on attempt 1 |
+| Retries needed | none. `--max-time 120` outlasted the wake |
+| Authentication | 200, not 401 — the key in the workflow matches the one on the instance |
+| What the sweep returned | `{"silenceAlerts":0,"deletedEvents":0,"scoredObservations":0}` |
+| Proof it was this call and not a wake | first ever `retention_runs` row with `source = 'scheduled'` |
+
+The last row is the one that settles it. Retention records every pass with the
+reason it ran, and until this date every row in that table said `startup` — the
+catch-up that fires when the instance boots. `scheduled` is written by nothing
+except the sweep endpoint, so a row with that source is the external arm of the
+design having run, rather than the service having been woken by something else
+and cleaning up on its way in.
+
+**All three counters were zero, and each is zero for a reason that was checked
+rather than assumed.** No event is older than the 14-day window, so retention had
+nothing to delete. Every detector verdict already carries an outcome, so scoring
+had nothing left to judge. And the silence rule reads a 24-hour window that
+currently holds no rollup rows at all — the newest is two days old — while the
+busiest group in the whole database has three active hours against a threshold of
+six. The query ran and correctly found nobody.
+
+That last one is worth stating plainly rather than dressing up: **the silence
+detector has never raised an alert in production, and on this data it cannot.**
+The path from a qualifying group to an alert row is covered by nine tests against
+a real PostgreSQL, including the positive case and the one that matches this
+deployment exactly — busy yesterday, nothing since, correctly silent. What is
+missing is not the mechanism but traffic with a shape that trips it.
+
 ### Grouping, on the live deployment
 
 | Check | Result |
@@ -1017,18 +1086,33 @@ been tested.
 
 ### What is built and not yet switched on
 
-Two things in this round are complete, tested and deliberately inactive, because
-turning them on needs something this repository does not contain.
+The sweep used to be listed here, waiting on `COLLECTOR_URL` and `INGEST_API_KEY`
+as repository secrets. They are set, it has run, and the measurement is in the
+table above. One thing is left.
 
-| | Waiting on |
-|---|---|
-| **Grouping v2** | the replay report, run against production. `active-version` stays at 1 until the merges and splits it lists are the ones expected |
-| **The hourly sweep** | `COLLECTOR_URL` and `INGEST_API_KEY` as repository secrets. Without them the workflow exits cleanly rather than failing |
+**Grouping v2** is complete, tested and deliberately inactive.
+`stacklight.grouping.active-version` stays at 1.
 
-Neither is a loose end left by accident. The version moves on evidence by design,
-and the collector's address is deliberately absent from this repository — the CI
-`policy` job fails the build if it appears anywhere under `web/`, which is what
-keeps the read path honest.
+The replay report has now been run against production, which was the condition
+this file set for moving it. The answer it gave was not the expected one:
+
+```
+{"version":2,"groupsTotal":9,"groupsCovered":7,"eventsReplayed":31,
+ "merges":[],"splits":[]}
+```
+
+Nothing merges and nothing splits. That is not evidence for v2, it is the absence
+of evidence either way: 31 events across 7 covered groups contain no case that
+tells the two versions apart. V2 changes how many in-app frames decide identity
+and how a frame with a scope rather than a location is keyed, and this deployment
+has no fault that exercises either. So the gate holds for the reason it was built
+— the report is meant to say what would change, and "nothing observable" is not
+a mandate to change the key every group is filed under.
+
+That is not a loose end left by accident. The version moves on evidence by
+design, and the collector's address is deliberately absent from this repository —
+the CI `policy` job fails the build if it appears anywhere under `web/`, which is
+what keeps the read path honest.
 
 ### Tests, as they stand
 
