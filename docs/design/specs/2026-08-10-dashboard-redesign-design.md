@@ -227,5 +227,7 @@ That is a stated limit, not an oversight.
 
 ## Housekeeping
 
-`.superpowers/` is added to `.gitignore`; the brainstorming mockups live there and should
-not enter the repository.
+The exploratory mockups behind this spec are working material and stay out of the
+repository. Local scratch directories are excluded per clone rather than through
+`.gitignore`, so no tooling path is committed; the `policy` job in CI is what
+actually enforces it, by failing on a tool-shaped file name or reference.

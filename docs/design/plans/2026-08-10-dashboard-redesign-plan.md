@@ -1,6 +1,7 @@
 # Dashboard Redesign Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Worked through task by task. Steps use checkbox (`- [ ]`) syntax so a partly
+> finished pass is legible; the verification loop below gates every commit.
 
 **Goal:** Rebuild the Stacklight dashboard around a persistent sidebar shell with a deliberate design system, replacing the unstyled scaffold that currently renders in Arial.
 
@@ -8,7 +9,7 @@
 
 **Tech Stack:** Next.js 16 App Router, React 19, Tailwind CSS 4, TypeScript, `@neondatabase/serverless`.
 
-**Spec:** `docs/superpowers/specs/2026-08-10-dashboard-redesign-design.md`
+**Spec:** `docs/design/specs/2026-08-10-dashboard-redesign-design.md`
 
 **Branch:** `redesign/dashboard` (already created, spec already committed)
 

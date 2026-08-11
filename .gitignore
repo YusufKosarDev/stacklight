@@ -34,8 +34,6 @@ next-env.d.ts
 Thumbs.db
 npm-debug.log*
 
-# Brainstorming mockups. Working material, not part of the project.
-.superpowers/
-
-# Browser-automation scratch output from local verification runs.
-.playwright-mcp/
+# Local scratch directories from editor and verification tooling are excluded
+# per clone in .git/info/exclude rather than here. Naming them in a tracked file
+# would put a tool path in the repository, which the `policy` job rejects.
