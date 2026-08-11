@@ -171,6 +171,19 @@ jobs:
           node --check examples/node-demo/demo.js
           node --check examples/node-demo/overflow.js
 
+      # The traffic generator reports through this client, so it is built and tested in
+      # the same job. The schedule is pure data and the tests are about what it must not
+      # do: exceed the collector's hourly cap, outgrow the storage budget, or keep
+      # running after its thirty hours are up.
+      #
+      # The test files are named rather than the directory: a directory argument
+      # misresolves on Windows, where this also has to run.
+      - name: Test the traffic scenario
+        run: node --test tools/traffic/*.test.mjs
+
+      - name: Check the generator parses
+        run: node --check tools/traffic/generate.mjs
+
   web:
     name: web
     runs-on: ubuntu-latest

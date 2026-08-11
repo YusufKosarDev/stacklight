@@ -1,0 +1,53 @@
+name: traffic
+
+# Sends one hour of a generated scenario to the collector, once an hour.
+#
+# This is not real traffic and the README says so in the same words. It exists because
+# the detector scorecard cannot compare three detectors on a deployment nobody uses: with
+# three judged buckets they all sat at 100% and the choice of active detector rested on an
+# argument rather than a measurement.
+#
+# Rollup buckets are written as date_trunc('hour', now()), so history cannot be
+# back-filled and the scenario has to be played against the wall clock. tools/traffic
+# holds the schedule; this file only decides when to call it.
+#
+# It stops itself. The schedule is thirty hours long and the generator exits without
+# sending anything once that has passed, so the cron can be left in place without waking
+# the instance every hour for ever. Deleting the workflow is the tidy-up, not the brake.
+#
+# The cost is the reason the run is bounded: each wake keeps the instance up for the
+# fifteen minutes Render waits before idling it out, and the 750 instance-hours a month
+# belong to the whole workspace. Thirty hourly wakes is about nine of them, once.
+
+on:
+  schedule:
+    # Twenty past, to stay clear of the sweep at seven past. Two jobs waking the same
+    # sleeping instance at the same moment would each pay for the other's cold start.
+    - cron: "20 * * * *"
+  workflow_dispatch:
+
+# One at a time. An hour still waiting out a cold start should not be joined by the next.
+concurrency:
+  group: traffic
+  cancel-in-progress: false
+
+jobs:
+  traffic:
+    name: traffic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # No install step. The generator reports through the project's own client, which
+      # has no dependencies, and that is half the point of using it rather than posting
+      # JSON: every hour of this run is another test of the bounded queue and the
+      # cold-start backoff against the real collector.
+      - name: Send this hour of the scenario
+        env:
+          COLLECTOR_URL: ${{ secrets.COLLECTOR_URL }}
+          INGEST_API_KEY: ${{ secrets.INGEST_API_KEY }}
+        run: node tools/traffic/generate.mjs
