@@ -188,6 +188,24 @@ class DetectionAlertingTests {
     }
 
     @Test
+    void theSpikeCooldownIsStillAnHourAfterSilenceWasGivenItsOwn() {
+        // Silence holds for a day because a sweep only asks every three hours. The kinds
+        // raised by an event arriving must not inherit that: a spike two hours after the
+        // last one is a new burst and is still worth saying. Without this, wiring the
+        // per-kind cooldown to the wrong value would go unnoticed -- every other cooldown
+        // test passes just as well at a day as at an hour.
+        long groupId = seedGroup("aaa", java.util.Collections.nCopies(24, 5));
+
+        detectionService.evaluate(groupId, 40);
+        assertThat(scalar("select count(*) from alerts where kind = 'spike'")).isEqualTo(1);
+
+        jdbc.sql("update alerts set created_at = created_at - interval '2 hours'").update();
+        detectionService.evaluate(groupId, 80);
+
+        assertThat(scalar("select count(*) from alerts where kind = 'spike'")).isEqualTo(2);
+    }
+
+    @Test
     void aRegressionRaisesItsOwnKindOfAlert() {
         long groupId = seedGroup("aaa", List.of());
 

@@ -92,9 +92,26 @@ stacklight:
     poisson-lambda-floor: 0.1
     new-group-window-hours: 2
     new-group-threshold: 10
+    # One alert per group per kind per cooldown. This value is for the kinds raised by an
+    # event arriving, whose repeats come as fast as events do.
     cooldown-minutes: 60
     score-after-hours: 3
     oracle-multiplier: 4.0
+
+    silence:
+      # The one signal the ingest path cannot produce, so these are read by the sweep.
+      window-hours: 24
+      # How long a group must have produced nothing to count as stopped.
+      quiet-hours: 3
+      # A habit, not a lull: below this the rule would fire on almost every group, since
+      # 97% of group-hour buckets are empty.
+      min-busy-hours: 6
+      # A day, against 60 minutes for the event-driven kinds, and the difference is the
+      # cadence rather than the severity. Silence is raised by a sweep every three hours,
+      # so an hour-long cooldown expires before anything asks again and suppresses
+      # nothing. A day outlasts the 19 hours a group can keep qualifying, which is what
+      # makes an episode produce exactly one alert.
+      cooldown-minutes: ${SILENCE_COOLDOWN_MINUTES:1440}
 
   alerting:
     # Blank turns delivery off without turning detection off: alerts are still found and

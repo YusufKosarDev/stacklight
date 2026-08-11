@@ -27,17 +27,25 @@ public class AlertStore {
             """;
 
     /**
-     * Whether this group alerted recently.
+     * Whether this group raised <em>this kind</em> of alert recently.
      *
      * <p>Alert fatigue is the failure mode that makes people stop reading alerts, and once
-     * that happens the whole feature is decoration. One notification per group per
+     * that happens the whole feature is decoration. One notification per group per kind per
      * cooldown; the group page carries the detail for anyone who wants it.
+     *
+     * <p>The kind is part of the question rather than a detail, because the kinds are
+     * different stories and a cooldown suppresses a repeat of the same one. "This group is
+     * spiking" and "this group has gone silent" are not repeats of each other — they are
+     * the two halves of a service that errored heavily and then died, and the second is the
+     * half worth waking up for. A check that ignored the kind would let the spike swallow
+     * it.
      */
     private static final String RECENTLY_ALERTED =
             """
             select exists (
                 select 1 from alerts
                  where group_id = :groupId
+                   and kind = :kind
                    and created_at > now() - make_interval(mins => :cooldownMinutes)
             )
             """;
@@ -96,10 +104,11 @@ public class AlertStore {
         this.jdbc = jdbc;
     }
 
-    public boolean recentlyAlerted(long groupId, int cooldownMinutes) {
+    public boolean recentlyAlerted(long groupId, String kind, int cooldownMinutes) {
         return Boolean.TRUE.equals(
                 jdbc.sql(RECENTLY_ALERTED)
                         .param("groupId", groupId)
+                        .param("kind", kind)
                         .param("cooldownMinutes", cooldownMinutes)
                         .query(Boolean.class)
                         .single());

@@ -2,6 +2,7 @@ package dev.stacklight.backend.detection;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import dev.stacklight.backend.alerting.AlertService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +30,7 @@ class SilenceDetectionTests {
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     @Autowired private SilenceService silenceService;
+    @Autowired private AlertService alertService;
     @Autowired private JdbcClient jdbc;
 
     @BeforeEach
@@ -72,6 +74,31 @@ class SilenceDetectionTests {
         return jdbc.sql("select count(*)::int from alerts where kind = 'silence'")
                 .query(Integer.class)
                 .single();
+    }
+
+    /**
+     * Moves this group's alerts back in time.
+     *
+     * <p>The cooldown is the one rule here that is about elapsed time rather than about
+     * the shape of the data, so testing it means moving one or the other. Moving the
+     * alerts is the honest direction: the rollups stay where they are, so the group keeps
+     * qualifying exactly as it would during a real quiet spell, and only the age of what
+     * was already said changes.
+     */
+    private void ageAlertsBy(long groupId, int hours) {
+        jdbc.sql(
+                        """
+                        update alerts
+                           set created_at = created_at - make_interval(hours => :hours)
+                         where group_id = :groupId
+                        """)
+                .param("hours", hours)
+                .param("groupId", groupId)
+                .update();
+    }
+
+    private Detection aDetection() {
+        return new Detection("poisson", true, 40, 5.0, 9.9, 3.0);
     }
 
     @Test
@@ -136,12 +163,59 @@ class SilenceDetectionTests {
     @Test
     void theSecondSweepDoesNotAlertAgainWithinTheCooldown() {
         // The condition stays true for as long as the group stays quiet, so without the
-        // cooldown every hourly sweep would send the same message again.
+        // cooldown every sweep would send the same message again.
         groupWithActivityAt("open", 4, 5, 6, 7, 8, 9, 10, 11);
 
         assertThat(silenceService.check()).isEqualTo(1);
         assertThat(silenceService.check()).isZero();
         assertThat(alertCount()).isEqualTo(1);
+    }
+
+    @Test
+    void anEpisodeProducesOneAlertAcrossEverySweepThatSeesIt() {
+        // The test above passes under any cooldown at all, because both sweeps happen in
+        // the same instant. This is the one that fails at 60 minutes: sweeps run every
+        // three hours, so the previous alert is always older than an hour by the time the
+        // next one asks, and an hour-long cooldown suppresses nothing.
+        //
+        // Eight sweeps at three-hour spacing is a day of a group staying quiet.
+        long groupId = groupWithActivityAt("open", 4, 5, 6, 7, 8, 9, 10, 11);
+
+        assertThat(silenceService.check()).isEqualTo(1);
+
+        for (int sweep = 1; sweep < 8; sweep++) {
+            ageAlertsBy(groupId, 3);
+            assertThat(silenceService.check())
+                    .as("sweep %d, %d hours after the alert", sweep, sweep * 3)
+                    .isZero();
+        }
+
+        assertThat(alertCount()).isEqualTo(1);
+    }
+
+    @Test
+    void aSpikeAlertDoesNotSwallowTheSilenceThatFollowsIt() {
+        // A group that errors heavily and then dies raises both, and the second is the
+        // half worth waking up for. The cooldown is per kind so the spike cannot absorb
+        // it -- before that it could, because a spike inside the silence cooldown looked
+        // like the silence having already been reported.
+        long groupId = groupWithActivityAt("open", 4, 5, 6, 7, 8, 9, 10, 11);
+        alertService.raiseSpike(groupId, aDetection());
+
+        assertThat(silenceService.check()).isEqualTo(1);
+        assertThat(alertCount()).isEqualTo(1);
+    }
+
+    @Test
+    void theSilenceCooldownLeavesTheEventDrivenKindsAlone() {
+        // The long cooldown belongs to one kind. A spike an hour after a silence alert is
+        // a new thing happening and is still reported.
+        long groupId = groupWithActivityAt("open", 4, 5, 6, 7, 8, 9, 10, 11);
+
+        assertThat(silenceService.check()).isEqualTo(1);
+        ageAlertsBy(groupId, 2);
+
+        assertThat(alertService.raiseSpike(groupId, aDetection())).isPresent();
     }
 
     @Test
