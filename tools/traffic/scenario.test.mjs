@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { HOURS, SERVICES, START_ISO, hourIndex, plan, series, totalEvents } from "./scenario.mjs";
+import {
+  HOURS,
+  SERVICES,
+  START_ISO,
+  hourIndex,
+  plan,
+  remaining,
+  series,
+  totalEvents,
+} from "./scenario.mjs";
 
 const at = (hoursAfterStart) =>
   new Date(new Date(START_ISO).getTime() + hoursAfterStart * 3_600_000);
@@ -102,6 +111,58 @@ test("the service that dies stays dead long enough for the silence rule to see i
   const busy = counts.slice(0, 12).filter((c) => c > 0).length;
   assert.ok(busy >= 6, `only ${busy} busy hours before it goes quiet`);
   assert.deepEqual(counts.slice(12, 24), new Array(12).fill(0));
+});
+
+test("an hour already delivered in full owes nothing, so the collector is not woken", () => {
+  // The load-bearing case. A twenty-minute cadence only costs what it should because a
+  // tick that finds the hour complete returns before opening a connection at all, and
+  // that decision is this function returning empty.
+  const work = plan(3);
+  const actual = new Map(work.map(({ service, count }) => [service.name, count]));
+
+  assert.deepEqual(remaining(work, actual), []);
+});
+
+test("a half-delivered hour owes exactly the difference", () => {
+  const work = plan(3);
+  const actual = new Map(work.map(({ service, count }) => [service.name, Math.floor(count / 2)]));
+  const owed = remaining(work, actual);
+
+  assert.equal(owed.length, work.length);
+  for (const entry of owed) {
+    assert.equal(entry.count, entry.target - entry.have);
+    assert.ok(entry.count > 0);
+  }
+});
+
+test("running the same hour twice sends nothing the second time", () => {
+  // What makes the cadence safe. Sending the plan rather than the difference is how one
+  // hour ended up with twice its traffic, which turns a routine peak into a real surge
+  // and destroys the case it was there to make.
+  const work = plan(9);
+  const delivered = new Map();
+
+  for (const entry of remaining(work, delivered)) {
+    delivered.set(entry.service.name, (delivered.get(entry.service.name) ?? 0) + entry.count);
+  }
+  assert.deepEqual(remaining(work, delivered), []);
+});
+
+test("an hour that somehow overshot is never asked for a negative send", () => {
+  const work = plan(3);
+  const actual = new Map(work.map(({ service, count }) => [service.name, count * 3]));
+
+  assert.deepEqual(remaining(work, actual), []);
+});
+
+test("a service the collector has never heard of is owed its whole hour", () => {
+  const work = plan(3);
+  const owed = remaining(work, new Map());
+
+  assert.deepEqual(
+    owed.map((e) => [e.service.name, e.count]),
+    work.map((w) => [w.service.name, w.count]),
+  );
 });
 
 test("the control profile spikes hard enough that missing it would be a fault", () => {

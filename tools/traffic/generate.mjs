@@ -15,7 +15,7 @@
  *   node tools/traffic/generate.mjs --hour 7 --dry-run
  */
 import sdk from "../../sdk/node/src/index.js";
-import { hourIndex, plan, HOURS, START_ISO } from "./scenario.mjs";
+import { hourIndex, plan, remaining, HOURS, START_ISO } from "./scenario.mjs";
 
 const { StacklightClient } = sdk;
 
@@ -108,6 +108,49 @@ function faultFor(service) {
 }
 
 /**
+ * What the collector already holds for the hour in progress, by service.
+ *
+ * Read over Neon's HTTP SQL endpoint with the runtime's own fetch rather than through a
+ * driver, for the same reason the client has no dependencies: this asks one question,
+ * once, and a package to do that would be the only thing installed anywhere under
+ * tools/. The role is the dashboard's, which holds nothing but SELECT.
+ *
+ * The rollup is written in the same transaction as the event, so anything the collector
+ * has accepted is visible here the moment it answers.
+ */
+async function alreadyDelivered(databaseUrl) {
+  const url = `https://${new URL(databaseUrl).host.replace(/^[^.]+\./, "api.")}/sql`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Neon-Connection-String": databaseUrl,
+      "Neon-Raw-Text-Output": "true",
+      "Neon-Array-Mode": "true",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      // Summed by service rather than read per group: a service owning two groups is not
+      // what this scenario builds, but reading it that way would quietly halve the count
+      // if it ever were.
+      query: `select g.service, sum(r.event_count)::int
+                from event_rollups r
+                join event_groups g on g.id = r.group_id
+               where r.bucket_start = date_trunc('hour', now())
+               group by g.service`,
+      params: [],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`reading the current hour failed: HTTP ${response.status}`);
+  }
+
+  const body = await response.json();
+  return new Map(body.rows.map(([service, count]) => [service, Number(count)]));
+}
+
+/**
  * Keeps the event loop alive while the client is waiting.
  *
  * The client unrefs the timer it backs off on, which is correct of it: a reporter must
@@ -147,15 +190,42 @@ async function main() {
 
   const endpoint = process.env.COLLECTOR_URL;
   const apiKey = process.env.INGEST_API_KEY;
+  const databaseUrl = process.env.DATABASE_URL;
   if (!endpoint || !apiKey) {
     console.log("COLLECTOR_URL or INGEST_API_KEY is not set; nothing sent");
     return 0;
   }
 
+  // Without a way to see what the hour already holds, this runs several times an hour and
+  // sends the hour again each time. Refusing is the safe answer: a missing hour distorts
+  // the scenario, a tripled one destroys it.
+  if (!databaseUrl) {
+    console.log("DATABASE_URL is not set, so the hour cannot be reconciled; nothing sent");
+    return 0;
+  }
+
+  const owed = remaining(work, await alreadyDelivered(databaseUrl));
+
+  // The whole point of the reconciliation, and the reason a twenty-minute cadence does
+  // not cost what it looks like it costs: when the hour is already complete this returns
+  // without opening a connection to the collector, so the instance it would have woken
+  // stays asleep. Most ticks end on this line.
+  if (owed.length === 0) {
+    console.log(`hour ${hour}: already delivered in full; the collector is left alone`);
+    return 0;
+  }
+
+  console.log("still owed this hour:");
+  for (const { service, target, have, count } of owed) {
+    console.log(
+      `  ${service.name.padEnd(22)} ${String(count).padStart(3)}  (${have} of ${target} already in)`,
+    );
+  }
+
   let failed = false;
   const release = holdTheLoopOpen();
   try {
-    failed = await send(work, endpoint, apiKey);
+    failed = await send(owed, endpoint, apiKey);
   } finally {
     release();
   }

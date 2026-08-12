@@ -148,6 +148,31 @@ export function plan(hour) {
   );
 }
 
+/**
+ * What an hour still owes, given what the collector already holds for it.
+ *
+ * The scheduler running this is best-effort and skips: of the first eighteen hours it
+ * fired for eleven, and the hours it dropped happened to be the ones carrying the cases
+ * the detectors disagree about. Running more often is the obvious answer and the wrong
+ * one on its own, because two ticks in the same hour would send that hour twice -- which
+ * already happened once, and doubling a count turns a routine peak into a real surge and
+ * destroys the very case it was there to make.
+ *
+ * So a tick sends the difference rather than the plan. Reading what is already there
+ * makes the send idempotent within the hour: a tick that finds the hour complete sends
+ * nothing, and a tick that finds it half-delivered finishes it. That is what makes a
+ * twenty-minute cadence safe, and it is also what keeps the cadence cheap -- most ticks
+ * end here, without a single request to a collector that would otherwise wake up for it.
+ */
+export function remaining(work, actual) {
+  return work
+    .map(({ service, count }) => {
+      const have = actual.get(service.name) ?? 0;
+      return { service, target: count, have, count: Math.max(0, count - have) };
+    })
+    .filter((entry) => entry.count > 0);
+}
+
 /** Every hour of the schedule for one service, which is what the tests reason about. */
 export function series(serviceName) {
   const service = SERVICES.find((s) => s.name === serviceName);

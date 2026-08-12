@@ -21,9 +21,17 @@ name: traffic
 
 on:
   schedule:
-    # Twenty past, to stay clear of the sweep at seven past. Two jobs waking the same
-    # sleeping instance at the same moment would each pay for the other's cold start.
-    - cron: "20 * * * *"
+    # Three times an hour, because once an hour did not survive contact with the
+    # scheduler: of the first eighteen hours it fired for eleven, and the hours it
+    # dropped were the ones carrying the cases the detectors disagree about.
+    #
+    # Running more often is only safe because the generator sends the difference rather
+    # than the plan. It reads what the hour already holds and sends what is missing, so a
+    # tick that finds the hour complete makes no request to the collector at all -- which
+    # is both the guard against double-sending and the reason three ticks an hour cost
+    # about what one did. Sending the plan on every tick is how one hour ended up with
+    # twice its traffic, and a doubled count turns a routine peak into a real surge.
+    - cron: "5,25,45 * * * *"
   workflow_dispatch:
 
 # One at a time, and the newest wins.
@@ -57,8 +65,17 @@ jobs:
       # has no dependencies, and that is half the point of using it rather than posting
       # JSON: every hour of this run is another test of the bounded queue and the
       # cold-start backoff against the real collector.
-      - name: Send this hour of the scenario
+      # DATABASE_URL is the dashboard's role, which holds nothing but SELECT. It is read
+      # to find out what the hour already has; nothing here writes to the database, and
+      # the events still go through the collector like any other client's would.
+      #
+      # Neon's compute wakes for each of these reads and idles out again a few minutes
+      # later, which over the rest of the run is a couple of compute-hours out of the
+      # month's allowance. It is a fraction of what the same ticks would cost if they
+      # woke the collector instead, which is the whole trade.
+      - name: Send what this hour is still missing
         env:
           COLLECTOR_URL: ${{ secrets.COLLECTOR_URL }}
           INGEST_API_KEY: ${{ secrets.INGEST_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node tools/traffic/generate.mjs
