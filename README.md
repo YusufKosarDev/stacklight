@@ -14,130 +14,224 @@ that sleeps, and read through an interface that ships no JavaScript of its own.
 
 ---
 
-## The clients
+## Contents
 
-Two of them — Java and Node — and the shape of both was decided by a measurement
-rather than a preference. From step 0:
+- [The architectural bet](#the-architectural-bet) — the read path never touches the ingestion service, and why that decides everything else
+- [Grouping](#grouping) — ten thousand events are not ten thousand problems
+- [Anomaly detection, and why the textbook answer does not fit](#anomaly-detection-and-why-the-textbook-answer-does-not-fit) — three detectors, shadow mode, and a scorecard that can disagree with the one in charge
+  - [The three detectors](#the-three-detectors)
+  - [Shadow mode](#shadow-mode)
+  - [Self-scoring, and what it is not](#self-scoring-and-what-it-is-not)
+  - [⚠️ The traffic behind those numbers is generated, not real](#-the-traffic-behind-those-numbers-is-generated-not-real)
+  - [Alert delivery](#alert-delivery)
+  - [Two cooldowns, because the kinds are not raised the same way](#two-cooldowns-because-the-kinds-are-not-raised-the-same-way)
+  - [⚠️ Alert latency, stated plainly](#-alert-latency-stated-plainly)
+  - [The scheduler objection, and where it stops holding](#the-scheduler-objection-and-where-it-stops-holding)
+  - [What the trigger costs, and why the cadence is what it is](#what-the-trigger-costs-and-why-the-cadence-is-what-it-is)
+- [Volume, and the limit that ends the project](#volume-and-the-limit-that-ends-the-project) — retention without a scheduler, because a timer cannot fire into a sleeping process
+- [Regression detection](#regression-detection) — an event landing on a group somebody called resolved
+- [The interface](#the-interface) — a dashboard that ships no JavaScript of its own
+- [The clients](#the-clients) — Java and Node, built around a collector that takes a hundred seconds to wake
+- [Connection strategy](#connection-strategy) — why the two halves talk to the same database differently
+- [API](#api) — four endpoints
+- [Layout](#layout) — where things live
+- [Local development](#local-development) — running it, and the two constraints the dashboard tests carry
+- [Deployment](#deployment) — environment variables, and what is optional
+- [Measured results](#measured-results) — every number in this file, taken against the live deployment
+  - [The clients, against the live collector](#the-clients-against-the-live-collector)
+  - [One thing this found](#one-thing-this-found)
+  - [Detection, on the live deployment](#detection-on-the-live-deployment)
+  - [Volume and time, on the live deployment](#volume-and-time-on-the-live-deployment)
+  - [The external trigger, once it was wired](#the-external-trigger-once-it-was-wired)
+  - [Grouping, on the live deployment](#grouping-on-the-live-deployment)
+  - [Pipeline](#pipeline)
+  - [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it)
+  - [The interface, after the redesign](#the-interface-after-the-redesign)
+  - [The list, once it could be filtered](#the-list-once-it-could-be-filtered)
+  - [The detector comparison: predicted before it was run](#the-detector-comparison-predicted-before-it-was-run)
+  - [What is built and not yet switched on](#what-is-built-and-not-yet-switched-on)
+  - [Tests, as they stand](#tests-as-they-stand)
+  - [The read path has its own cold start, and it is not free](#the-read-path-has-its-own-cold-start-and-it-is-not-free)
+  - [Two findings worth carrying forward](#two-findings-worth-carrying-forward)
 
-> The collector's cold start was measured at 95, 104, 104, 106 and 114 seconds.
-> On the 95-second measurement the platform returned **503** rather than holding
-> the connection open.
+---
 
-Everything below follows from that. A client that waits on this endpoint is worse
-than no client at all, and a client that treats one failed attempt as a lost
-event throws away almost everything during a wake.
+## The architectural bet
 
-### What both clients do
+```
+                  write path                              read path
+                  ----------                              ---------
 
-| | |
-|---|---|
-| **Capture** | Enqueue and return. No connection is opened, none is waited for, nothing is thrown — the caller is usually already dealing with something that went wrong. Measured at **19.8 microseconds** per capture against a collector that does not answer. |
-| **Queue** | Bounded. The alternative is not "no loss", it is an application that runs out of heap because its error reporter would not let go of anything. |
-| **When full** | The **oldest** goes. The queue only fills when the collector is unreachable, so when it comes back, what is happening now is worth more than what was happening two minutes ago. |
-| **Every drop** | Counted and readable from the application. A reporter that quietly loses things is worse than one that says how many. |
-| **Timeouts** | Short — 3 s connect, 5 s request. The first attempt against a sleeping collector is *supposed* to fail. |
-| **Retries** | Exponential backoff with **full jitter**, capped at 30 s. Failed batches go back to the front of the queue rather than being counted as sent. |
-| **Rejections** | A 401 does not become a 200 by being retried. Those batches are discarded and the reason is kept, instead of blocking the queue for ever. |
-| **Shutdown** | Bounded flush. The events worth having most are the ones still in memory when a process dies. |
-| **Its own failures** | Silent unless `debug` is on. A library whose job is to report errors must not become a source of them. |
-| **Dependencies** | **None.** Every jar or package a reporter drags in is a version it can conflict with, inside an application that did not ask for it. |
-
-### Why the drop policy is what it is
-
-Dropping the oldest means the first occurrence of an incident is the first to go,
-and that is the diagnostic one. It is accepted because the collector groups by
-fingerprint: a later event of the same fault opens the same group, so losing the
-earliest copy costs a count and a timestamp. Dropping the *newest* instead would
-mean that during a sustained burst nothing recent ever gets through, which is
-worse in the case that actually matters.
-
-### Stack traces are sent exactly as the runtime printed them
-
-The Java client sends `printStackTrace` output; the Node client sends
-`error.stack`. Neither reformats anything, because the collector's parsers were
-written against those formats in step 1 — tidying them here would mean two
-formats to keep in step instead of one.
-
-That compatibility is a test rather than an assumption. Samples captured from a
-running JVM and from Node live in the collector's suite, and they assert the
-frames come out right, the vendor split is right, and a redeploy that shifts line
-numbers keeps the same group.
-
-### Java
-
-Two artifacts. `stacklight-client` has no compile dependencies and works from
-plain Java; `stacklight-spring` is a thin starter on top.
-
-```java
-StacklightClient client = StacklightClient.start(new StacklightOptions()
-        .endpoint("https://collector.example.com/api/events")
-        .apiKey(System.getenv("STACKLIGHT_KEY"))
-        .service("checkout-api")
-        .release("1.4.0"));
-
-client.capture(exception);
+  client                                            browser
+    |                                                  |
+    | POST /api/events                                 | GET /
+    | X-Stacklight-Key                                 |
+    v                                                  v
+  Spring Boot 4 (Render, free)                    Next.js 16 (Vercel)
+    |  Flyway migration                            server component
+    |  JdbcClient insert                                |
+    v                                                   v
+  Neon Postgres 17  <----------- SQL over HTTP ---------+
+  (eu-central-1)
 ```
 
-With the starter, two properties and nothing else:
+The read path never touches the ingestion service.
 
-```yaml
-stacklight:
-  endpoint: ${STACKLIGHT_ENDPOINT:}
-  api-key: ${STACKLIGHT_KEY:}
+That is the whole architectural bet. Render's free tier sleeps after 15 minutes
+of inactivity and takes 30–60 seconds to wake. If the dashboard were proxied
+through it, every visitor arriving at a cold service would stare at a blank page
+for the better part of a minute. Because the dashboard is a server component
+talking to Postgres directly, the ingestion service can be asleep, restarting or
+failing to deploy and the dashboard still renders in full.
+
+**Measured rather than asserted.** These two requests are seven seconds apart, on
+a service that had been idle for nineteen minutes:
+
+```
+22:41:10   dashboard   200 in   0.40 s — 9 groups, charts, alerts, scorecard
+22:41:17   ingestion   200 in 104.20 s — cold start
 ```
 
-Exceptions reaching a controller are reported through a `HandlerExceptionResolver`
-that **always returns null**, rather than a `@ControllerAdvice`. An advice would
-have to either handle the exception, taking over the application's error
-responses, or rethrow it, changing where it surfaces. Returning null means "not
-handled": it sees everything and changes nothing. Verified live — the demo's
-failing endpoint still returns the application's own 500.
+During the window in which the ingestion service could not answer at all, the
+dashboard served everything in under half a second. The full control, and the
+static check in CI that stops the read path quietly acquiring a dependency on the
+service that is supposed to be optional, are in
+[The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it).
+It is re-measured whenever the read path changes.
 
-The uncaught-exception handler delegates to whatever was installed before it,
-because a process-wide handler is something that belonged to the application.
+Everything else in this file follows from that bet. Grouping and rollups happen
+on the write path so the dashboard never has to compute them; retention runs on
+ingest because a timer cannot fire into a process that is asleep; and the clients
+are built around a collector that takes a hundred seconds to wake.
 
-### Node
+---
 
-Node only. The browser is deliberately out of scope: the collector authenticates
-with a shared secret in a header, and putting that in browser JavaScript publishes
-it — anyone could then fill the database, which on this plan suspends the project.
-Supporting browsers needs a public-key model with per-origin limits, which is its
-own piece of work rather than a flag on this one.
+## Grouping
 
-```js
-const stacklight = StacklightClient.start({
-  endpoint: process.env.STACKLIGHT_ENDPOINT,
-  apiKey: process.env.STACKLIGHT_KEY,
-  service: "checkout-api",
-});
+Ten thousand events are not ten thousand problems. Grouping turns the stream
+into a list of distinct faults, and the only useful version of that is one you
+can predict: the same error must always land in the same group, and you have to
+be able to see why it did.
 
-stacklight.captureException(error);
+Nothing in the pipeline is statistical, trained, or free to change its mind
+between two runs. Every group page shows its own worked example, and
+[/how-grouping-works](https://stacklight-eosin.vercel.app/how-grouping-works)
+explains the rules.
+
+```
+event ──▶ detect platform ──▶ parse frames ──▶ split in-app / vendor
+                                                       │
+                             normalize message ────────┤
+                                                       ▼
+                                          assemble fingerprint input
+                                                       │
+                                                    SHA-256
+                                                       ▼
+                                     group = (fingerprint, version)
 ```
 
-`uncaughtException` needs care and gets it. Registering a listener suppresses
-Node's default behaviour of printing the error and exiting, so a reporter that
-merely listened would silently turn a crash into a hang. The handler restores it
-when nothing else has claimed it: if this client is the only listener, it flushes
-and then exits with the code Node would have used.
+**One parser per platform.** Java and V8 stack traces share nothing past the
+leading `at`, and the rule for deciding whether a frame belongs to the
+application differs for each, so each gets its own implementation behind a
+common interface.
 
-### Running the examples
+**Only in-app frames decide the group.** One bug is reached through a different
+framework path depending on which request hit it. Grouping on vendor frames
+splits a single fault across many groups. Measured live: the same
+`NullPointerException` arriving through `InvocableHandlerMethod` and through
+`RequestMappingHandlerAdapter` produces one group.
 
-```bash
-# Java
-cd sdk/java && ./mvnw install
-cd examples/java-demo && ./mvnw package
-STACKLIGHT_ENDPOINT=... STACKLIGHT_KEY=... java -jar target/java-demo-0.1.0.jar
-curl localhost:8081/boom
+**Line numbers are excluded.** Adding a line above a throw site shifts every
+number below it, and a fingerprint that moved on every such edit would open a
+new group for an error that never changed.
 
-# Node
-STACKLIGHT_ENDPOINT=... STACKLIGHT_KEY=... node examples/node-demo/demo.js
-node examples/node-demo/overflow.js     # drop policy, no collector needed
+**Paths are cut at the last source root.** `/app/src/cart.js` in a container and
+`/home/dev/work/checkout/src/cart.js` on a laptop are the same frame. Without
+this, the same fault files itself twice depending on where it ran.
+
+**The message is excluded whenever frames exist.** Messages carry values and
+runtimes reword them between releases. With no frames the normalized message is
+all there is and is used instead — the group says so on its page.
+
+**Minified frames are detected, not grouped on.** Minified names are reassigned
+on every build, so a fingerprint built from them opens a fresh group per deploy,
+which is worse than not grouping. Resolving them properly needs source maps,
+which this project does not accept yet.
+
+### Why old groups are frozen when the algorithm changes
+
+A group is keyed by `(fingerprint, fingerprint_version)`. When the algorithm
+changes, old groups are left exactly as they are.
+
+The tempting alternative is to re-fingerprint history so everything lives under
+the new rules. It does not survive contact with what a group actually is. A
+group carries observed facts — when it was first seen, how often it happened,
+and later whether someone resolved it. A new version can merge two old groups
+and split a third in the same pass, so there is no one-to-one mapping to apply
+and no correct answer for which first-seen survives a merge or what happens to
+the group already marked resolved.
+
+The cost is real and worth stating plainly: after a version bump, an error that
+is still happening opens a new group while the old one stops growing. That is
+visible noise, which is why the active version changes rarely and on purpose.
+
+What makes the change safe to plan is a report produced before anything moves.
+
+### The report, and a claim this file used to make
+
+Earlier versions of this file said a new algorithm could be replayed over the
+stored `fingerprint_input`. **It cannot, and the reason is worth keeping.** That
+column holds the *output* of the version that wrote it: frames already parsed,
+already filtered to in-app. A version that changes parsing, or which frames
+count — most of what a new version would want to change — cannot be recomputed
+from it.
+
+So the replay reads raw stack traces from `events` and runs the real
+fingerprinter over them, which is exact. It pays for that in coverage: retention
+deletes traces after fourteen days, and events over the hourly cap never stored
+one. The report says how many groups it could actually speak for, so a merge it
+does not mention can be told from one it could not see.
+
+```
+GET /api/grouping/replay?version=2
 ```
 
-Neither client is published to Maven Central or npm, and that is a decision rather
-than an omission. Publishing means a namespace, signing keys and an account per
-registry, none of which changes whether the code is any good; the repository and
-`mvn install` are enough for what this is.
+Returns the merges — one candidate fingerprint absorbing several existing groups
+— the splits, and the coverage. A test replays the *active* version over its own
+events and asserts it reports nothing; without that control the report would be
+measuring the replay rather than the version.
+
+### What version 2 changes, and why it is not switched on yet
+
+Written and tested. It moves two things in opposite directions on purpose, so
+the report has something to show:
+
+- **Three in-app frames decide identity, not eight.** Eight makes a fingerprint
+  a description of the whole call path rather than of the fault, so one bug
+  reached from two places becomes two groups. Three rather than one, because the
+  top frame is often a shared helper that throws for unrelated reasons.
+- **A frame keeps the file it came from** when the declaring class is a scope
+  rather than a location. `Object.<anonymous>` in two unrelated JavaScript entry
+  files is one signature under v1, and they are not the same frame. Java frames
+  are untouched: `CartService.java` says nothing `com.example.CartService` has
+  not already said.
+
+V2 carries its own signature function rather than editing the one v1 hashes.
+Editing that would change what v1 produces for events arriving tomorrow, which
+is exactly the silent re-pointing the version key exists to prevent.
+
+`stacklight.grouping.active-version` still reads 1. It moves once the report has
+been run against production and the merges and splits it lists are the ones
+expected — which is the entire point of having built the report first.
+
+### Similar groups
+
+`pg_trgm` over a GIN index surfaces near misses on a group page. It catches what
+a fingerprint deliberately will not: renaming `CartService.total` to
+`PricingService.calculateTotal` is a different code path and correctly gets its
+own group, but the two are shown as related at a similarity of 1.00.
+
+They are suggestions. Nothing merges on its own, and no model is involved.
 
 ---
 
@@ -527,168 +621,6 @@ PATCH /api/groups/{id}   {"status": "resolved", "release": "1.7.0"}
 
 ---
 
-## Grouping
-
-Ten thousand events are not ten thousand problems. Grouping turns the stream
-into a list of distinct faults, and the only useful version of that is one you
-can predict: the same error must always land in the same group, and you have to
-be able to see why it did.
-
-Nothing in the pipeline is statistical, trained, or free to change its mind
-between two runs. Every group page shows its own worked example, and
-[/how-grouping-works](https://stacklight-eosin.vercel.app/how-grouping-works)
-explains the rules.
-
-```
-event ──▶ detect platform ──▶ parse frames ──▶ split in-app / vendor
-                                                       │
-                             normalize message ────────┤
-                                                       ▼
-                                          assemble fingerprint input
-                                                       │
-                                                    SHA-256
-                                                       ▼
-                                     group = (fingerprint, version)
-```
-
-**One parser per platform.** Java and V8 stack traces share nothing past the
-leading `at`, and the rule for deciding whether a frame belongs to the
-application differs for each, so each gets its own implementation behind a
-common interface.
-
-**Only in-app frames decide the group.** One bug is reached through a different
-framework path depending on which request hit it. Grouping on vendor frames
-splits a single fault across many groups. Measured live: the same
-`NullPointerException` arriving through `InvocableHandlerMethod` and through
-`RequestMappingHandlerAdapter` produces one group.
-
-**Line numbers are excluded.** Adding a line above a throw site shifts every
-number below it, and a fingerprint that moved on every such edit would open a
-new group for an error that never changed.
-
-**Paths are cut at the last source root.** `/app/src/cart.js` in a container and
-`/home/dev/work/checkout/src/cart.js` on a laptop are the same frame. Without
-this, the same fault files itself twice depending on where it ran.
-
-**The message is excluded whenever frames exist.** Messages carry values and
-runtimes reword them between releases. With no frames the normalized message is
-all there is and is used instead — the group says so on its page.
-
-**Minified frames are detected, not grouped on.** Minified names are reassigned
-on every build, so a fingerprint built from them opens a fresh group per deploy,
-which is worse than not grouping. Resolving them properly needs source maps,
-which this project does not accept yet.
-
-### Why old groups are frozen when the algorithm changes
-
-A group is keyed by `(fingerprint, fingerprint_version)`. When the algorithm
-changes, old groups are left exactly as they are.
-
-The tempting alternative is to re-fingerprint history so everything lives under
-the new rules. It does not survive contact with what a group actually is. A
-group carries observed facts — when it was first seen, how often it happened,
-and later whether someone resolved it. A new version can merge two old groups
-and split a third in the same pass, so there is no one-to-one mapping to apply
-and no correct answer for which first-seen survives a merge or what happens to
-the group already marked resolved.
-
-The cost is real and worth stating plainly: after a version bump, an error that
-is still happening opens a new group while the old one stops growing. That is
-visible noise, which is why the active version changes rarely and on purpose.
-
-What makes the change safe to plan is a report produced before anything moves.
-
-### The report, and a claim this file used to make
-
-Earlier versions of this file said a new algorithm could be replayed over the
-stored `fingerprint_input`. **It cannot, and the reason is worth keeping.** That
-column holds the *output* of the version that wrote it: frames already parsed,
-already filtered to in-app. A version that changes parsing, or which frames
-count — most of what a new version would want to change — cannot be recomputed
-from it.
-
-So the replay reads raw stack traces from `events` and runs the real
-fingerprinter over them, which is exact. It pays for that in coverage: retention
-deletes traces after fourteen days, and events over the hourly cap never stored
-one. The report says how many groups it could actually speak for, so a merge it
-does not mention can be told from one it could not see.
-
-```
-GET /api/grouping/replay?version=2
-```
-
-Returns the merges — one candidate fingerprint absorbing several existing groups
-— the splits, and the coverage. A test replays the *active* version over its own
-events and asserts it reports nothing; without that control the report would be
-measuring the replay rather than the version.
-
-### What version 2 changes, and why it is not switched on yet
-
-Written and tested. It moves two things in opposite directions on purpose, so
-the report has something to show:
-
-- **Three in-app frames decide identity, not eight.** Eight makes a fingerprint
-  a description of the whole call path rather than of the fault, so one bug
-  reached from two places becomes two groups. Three rather than one, because the
-  top frame is often a shared helper that throws for unrelated reasons.
-- **A frame keeps the file it came from** when the declaring class is a scope
-  rather than a location. `Object.<anonymous>` in two unrelated JavaScript entry
-  files is one signature under v1, and they are not the same frame. Java frames
-  are untouched: `CartService.java` says nothing `com.example.CartService` has
-  not already said.
-
-V2 carries its own signature function rather than editing the one v1 hashes.
-Editing that would change what v1 produces for events arriving tomorrow, which
-is exactly the silent re-pointing the version key exists to prevent.
-
-`stacklight.grouping.active-version` still reads 1. It moves once the report has
-been run against production and the merges and splits it lists are the ones
-expected — which is the entire point of having built the report first.
-
-### Similar groups
-
-`pg_trgm` over a GIN index surfaces near misses on a group page. It catches what
-a fingerprint deliberately will not: renaming `CartService.total` to
-`PricingService.calculateTotal` is a different code path and correctly gets its
-own group, but the two are shown as related at a similarity of 1.00.
-
-They are suggestions. Nothing merges on its own, and no model is involved.
-
----
-
-## The architectural bet
-
-```
-                  write path                              read path
-                  ----------                              ---------
-
-  client                                            browser
-    |                                                  |
-    | POST /api/events                                 | GET /
-    | X-Stacklight-Key                                 |
-    v                                                  v
-  Spring Boot 4 (Render, free)                    Next.js 16 (Vercel)
-    |  Flyway migration                            server component
-    |  JdbcClient insert                                |
-    v                                                   v
-  Neon Postgres 17  <----------- SQL over HTTP ---------+
-  (eu-central-1)
-```
-
-The read path never touches the ingestion service.
-
-That is the whole architectural bet. Render's free tier sleeps after 15 minutes
-of inactivity and takes 30–60 seconds to wake. If the dashboard were proxied
-through it, every visitor arriving at a cold service would stare at a blank page
-for the better part of a minute. Because the dashboard is a server component
-talking to Postgres directly, the ingestion service can be asleep, restarting or
-failing to deploy and the dashboard still renders in full.
-
-The measurements below test that claim rather than assert it, and it is
-re-checked whenever the read path changes.
-
----
-
 ## The interface
 
 The dashboard is the only part of this project anyone sees, and for four steps it
@@ -792,6 +724,133 @@ would stop being a way to navigate.
 
 ---
 
+## The clients
+
+Two of them — Java and Node — and the shape of both was decided by a measurement
+rather than a preference. From step 0:
+
+> The collector's cold start was measured at 95, 104, 104, 106 and 114 seconds.
+> On the 95-second measurement the platform returned **503** rather than holding
+> the connection open.
+
+Everything below follows from that. A client that waits on this endpoint is worse
+than no client at all, and a client that treats one failed attempt as a lost
+event throws away almost everything during a wake.
+
+### What both clients do
+
+| | |
+|---|---|
+| **Capture** | Enqueue and return. No connection is opened, none is waited for, nothing is thrown — the caller is usually already dealing with something that went wrong. Measured at **19.8 microseconds** per capture against a collector that does not answer. |
+| **Queue** | Bounded. The alternative is not "no loss", it is an application that runs out of heap because its error reporter would not let go of anything. |
+| **When full** | The **oldest** goes. The queue only fills when the collector is unreachable, so when it comes back, what is happening now is worth more than what was happening two minutes ago. |
+| **Every drop** | Counted and readable from the application. A reporter that quietly loses things is worse than one that says how many. |
+| **Timeouts** | Short — 3 s connect, 5 s request. The first attempt against a sleeping collector is *supposed* to fail. |
+| **Retries** | Exponential backoff with **full jitter**, capped at 30 s. Failed batches go back to the front of the queue rather than being counted as sent. |
+| **Rejections** | A 401 does not become a 200 by being retried. Those batches are discarded and the reason is kept, instead of blocking the queue for ever. |
+| **Shutdown** | Bounded flush. The events worth having most are the ones still in memory when a process dies. |
+| **Its own failures** | Silent unless `debug` is on. A library whose job is to report errors must not become a source of them. |
+| **Dependencies** | **None.** Every jar or package a reporter drags in is a version it can conflict with, inside an application that did not ask for it. |
+
+### Why the drop policy is what it is
+
+Dropping the oldest means the first occurrence of an incident is the first to go,
+and that is the diagnostic one. It is accepted because the collector groups by
+fingerprint: a later event of the same fault opens the same group, so losing the
+earliest copy costs a count and a timestamp. Dropping the *newest* instead would
+mean that during a sustained burst nothing recent ever gets through, which is
+worse in the case that actually matters.
+
+### Stack traces are sent exactly as the runtime printed them
+
+The Java client sends `printStackTrace` output; the Node client sends
+`error.stack`. Neither reformats anything, because the collector's parsers were
+written against those formats in step 1 — tidying them here would mean two
+formats to keep in step instead of one.
+
+That compatibility is a test rather than an assumption. Samples captured from a
+running JVM and from Node live in the collector's suite, and they assert the
+frames come out right, the vendor split is right, and a redeploy that shifts line
+numbers keeps the same group.
+
+### Java
+
+Two artifacts. `stacklight-client` has no compile dependencies and works from
+plain Java; `stacklight-spring` is a thin starter on top.
+
+```java
+StacklightClient client = StacklightClient.start(new StacklightOptions()
+        .endpoint("https://collector.example.com/api/events")
+        .apiKey(System.getenv("STACKLIGHT_KEY"))
+        .service("checkout-api")
+        .release("1.4.0"));
+
+client.capture(exception);
+```
+
+With the starter, two properties and nothing else:
+
+```yaml
+stacklight:
+  endpoint: ${STACKLIGHT_ENDPOINT:}
+  api-key: ${STACKLIGHT_KEY:}
+```
+
+Exceptions reaching a controller are reported through a `HandlerExceptionResolver`
+that **always returns null**, rather than a `@ControllerAdvice`. An advice would
+have to either handle the exception, taking over the application's error
+responses, or rethrow it, changing where it surfaces. Returning null means "not
+handled": it sees everything and changes nothing. Verified live — the demo's
+failing endpoint still returns the application's own 500.
+
+The uncaught-exception handler delegates to whatever was installed before it,
+because a process-wide handler is something that belonged to the application.
+
+### Node
+
+Node only. The browser is deliberately out of scope: the collector authenticates
+with a shared secret in a header, and putting that in browser JavaScript publishes
+it — anyone could then fill the database, which on this plan suspends the project.
+Supporting browsers needs a public-key model with per-origin limits, which is its
+own piece of work rather than a flag on this one.
+
+```js
+const stacklight = StacklightClient.start({
+  endpoint: process.env.STACKLIGHT_ENDPOINT,
+  apiKey: process.env.STACKLIGHT_KEY,
+  service: "checkout-api",
+});
+
+stacklight.captureException(error);
+```
+
+`uncaughtException` needs care and gets it. Registering a listener suppresses
+Node's default behaviour of printing the error and exiting, so a reporter that
+merely listened would silently turn a crash into a hang. The handler restores it
+when nothing else has claimed it: if this client is the only listener, it flushes
+and then exits with the code Node would have used.
+
+### Running the examples
+
+```bash
+# Java
+cd sdk/java && ./mvnw install
+cd examples/java-demo && ./mvnw package
+STACKLIGHT_ENDPOINT=... STACKLIGHT_KEY=... java -jar target/java-demo-0.1.0.jar
+curl localhost:8081/boom
+
+# Node
+STACKLIGHT_ENDPOINT=... STACKLIGHT_KEY=... node examples/node-demo/demo.js
+node examples/node-demo/overflow.js     # drop policy, no collector needed
+```
+
+Neither client is published to Maven Central or npm, and that is a decision rather
+than an omission. Publishing means a namespace, signing keys and an account per
+registry, none of which changes whether the code is any good; the repository and
+`mvn install` are enough for what this is.
+
+---
+
 ## Connection strategy
 
 Both halves talk to the same database, and they deliberately do it differently.
@@ -824,35 +883,6 @@ target. A database check on every ping would keep the Neon compute awake for
 exactly the reason above.
 
 ---
-
-## Layout
-
-```
-backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
-  grouping/   parsers, normalizer, two fingerprinter versions, replay report
-  ingest/     endpoint, guard, event / group / rollup persistence, status, sweep
-  retention/  sweep, adaptive window, startup catch-up
-  detection/  three detectors, shadow recording, self-scoring, silence
-  alerting/   outbox, cooldown, best-effort mail delivery
-web/       Next.js 16 App Router, deployed to Vercel
-  app/        groups, charts, alerts, detector scorecard, how grouping works
-    components/shell/  sidebar, nav counts, the frame every route renders into
-    components/ui/     panel, stat tile, badge
-  lib/        Neon handle, the read queries, the list's URL state
-  test/       node --test over the pure logic, no runner installed
-.githooks/ commit-msg policy, enabled with core.hooksPath
-.github/   CI: policy scan, backend and web tests, image build, web build
-           sweep: the three-hourly trigger that wakes the collector
-```
-
-Grouping and rollup both run inline on the ingest path rather than behind a
-queue: a few regular expressions, a hash and two upserts, so the latency they add
-is small next to the network call that delivered the event, and a group and its
-trend are visible the moment the first event lands. A worker earns its complexity
-when volume outgrows a single free instance, not before.
-
-Retention is the exception that proves the rule — it is the one job that would
-normally be scheduled, and it is not, for the reason given above.
 
 ## API
 
@@ -898,6 +928,35 @@ already exist. Read-only.
 `GET /actuator/health` — no authentication, no database access.
 
 ---
+
+## Layout
+
+```
+backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
+  grouping/   parsers, normalizer, two fingerprinter versions, replay report
+  ingest/     endpoint, guard, event / group / rollup persistence, status, sweep
+  retention/  sweep, adaptive window, startup catch-up
+  detection/  three detectors, shadow recording, self-scoring, silence
+  alerting/   outbox, cooldown, best-effort mail delivery
+web/       Next.js 16 App Router, deployed to Vercel
+  app/        groups, charts, alerts, detector scorecard, how grouping works
+    components/shell/  sidebar, nav counts, the frame every route renders into
+    components/ui/     panel, stat tile, badge
+  lib/        Neon handle, the read queries, the list's URL state
+  test/       node --test over the pure logic, no runner installed
+.githooks/ commit-msg policy, enabled with core.hooksPath
+.github/   CI: policy scan, backend and web tests, image build, web build
+           sweep: the three-hourly trigger that wakes the collector
+```
+
+Grouping and rollup both run inline on the ingest path rather than behind a
+queue: a few regular expressions, a hash and two upserts, so the latency they add
+is small next to the network call that delivered the event, and a group and its
+trend are visible the moment the first event lands. A worker earns its complexity
+when volume outgrows a single free instance, not before.
+
+Retention is the exception that proves the rule — it is the one job that would
+normally be scheduled, and it is not, for the reason given above.
 
 ## Local development
 
