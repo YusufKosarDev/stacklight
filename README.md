@@ -266,6 +266,32 @@ Its tests are about what the schedule must not do — exceed the collector's
 per-group hourly cap, outgrow the storage budget, or keep waking a free instance
 after its thirty hours are up.
 
+**A tick sends the difference, not the plan.** The first version ran once an
+hour and assumed the run happened. It did not: of the first eighteen hours the
+scheduler fired for eleven, and the seven it dropped were not a random seven —
+the profile aimed at the active detector peaks every sixth hour, and every one of
+those peaks landed in an hour that was skipped. The scorecard showed three
+detectors that looked identical because the cases meant to separate them had
+never been sent.
+
+Ticking more often is the obvious fix and is unsafe alone. Sending the plan again
+sends the hour again, and **doubling a count is worse than losing it**: a routine
+peak at forty becomes a genuine surge at eighty, so a case built to be a false
+positive turns into a true one and argues the opposite of what it was for. That
+happened twice before the reconciliation existed.
+
+So each tick reads what the hour already holds — over Neon's HTTP endpoint, with
+the dashboard's `SELECT`-only role — and sends only what is missing. Three things
+follow, and the third is the one that pays for the other two:
+
+- Sending twice is arithmetically impossible. Whatever arrived counts, whoever
+  sent it.
+- A skipped tick is recovered by the next one inside the same hour rather than
+  costing the whole hour.
+- **A tick that owes nothing returns before opening a connection to the
+  collector**, so the instance it would have woken stays asleep. Most ticks end
+  there, in under a second, and three an hour cost about what one did.
+
 ### Alert delivery
 
 An alert is a row before it is an email. It is written in the same transaction
