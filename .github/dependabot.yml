@@ -1,0 +1,85 @@
+version: 2
+
+# Grouping is the point of this file.
+#
+# Ungrouped, a weekly run on a repository with five Maven manifests and a Next.js
+# application opens a pull request per dependency, and a fortnight of that is a review
+# queue nobody works through. What arrives instead is one pull request a week per
+# ecosystem for the minor and patch bumps, which are the ones that are usually a rebuild
+# and a green tick.
+#
+# Majors are deliberately left out of the groups. A major is a decision -- a new Spring
+# Boot line, a new Next.js -- and it deserves its own branch, its own CI run and its own
+# read of the changelog rather than being carried in on the back of nine patch bumps.
+
+updates:
+  # ---- Maven ---------------------------------------------------------------------
+  # Five manifests, and each one declares dependencies of its own rather than inheriting
+  # them all: the collector, the SDK parent, both SDK artifacts, and the example that CI
+  # builds against the starter to stop it rotting.
+  - package-ecosystem: maven
+    directories:
+      - "/backend"
+      - "/sdk/java"
+      - "/sdk/java/stacklight-client"
+      - "/sdk/java/stacklight-spring"
+      - "/examples/java-demo"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      maven:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # The example depends on the SDK from this repository, which is not published to
+      # any registry -- deliberately, and the README says why. Left in, this would be a
+      # weekly attempt to find dev.stacklight in Maven Central and a weekly failure.
+      - dependency-name: "dev.stacklight:*"
+
+  # ---- npm -----------------------------------------------------------------------
+  # The dashboard only. sdk/node is absent on purpose: it has no dependencies and no
+  # lockfile, which is a property the README claims and CI enforces, so there is nothing
+  # here for Dependabot to keep current.
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm:
+        update-types:
+          - minor
+          - patch
+
+  # ---- GitHub Actions ------------------------------------------------------------
+  # Three workflows pinned to major tags. These move rarely and break loudly, so one
+  # grouped pull request is plenty.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
