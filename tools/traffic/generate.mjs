@@ -186,9 +186,19 @@ async function send(work, endpoint, apiKey) {
       client.captureException(faultFor(service));
     }
 
-    await client.flush();
-    const stats = client.stats();
+    // close(), not flush(). flush() drains the queue, and an empty queue is not the same
+    // as a delivered one: the dispatcher's own loop takes a batch out of the queue before
+    // trying it, so during a cold-start retry the events are in flight and the queue
+    // reads empty. flush() then returns at once and stats() reports sent=0 for events
+    // that are seconds from arriving.
+    //
+    // close() is stop() followed by a full-budget flush. stop() waits for the loop to
+    // finish, which puts the failed batch back on the queue, and the flush that follows
+    // has the whole four minutes to land it. That is the only call here that means
+    // "delivered", and reading stats before it is what made eight runs report failure
+    // for traffic the database had already accepted.
     await client.close();
+    const stats = client.stats();
 
     const ok = stats.sent === count && stats.dropped === 0;
     console.log(
