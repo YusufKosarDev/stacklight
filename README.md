@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-271-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-292-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -78,6 +78,7 @@ silently would have made the clip an illustration rather than evidence.
   - [The result, and the detector it changed](#the-result-and-the-detector-it-changed)
   - [What is built and not yet switched on](#what-is-built-and-not-yet-switched-on)
   - [Tests, as they stand](#tests-as-they-stand)
+  - [The dashboard renders in a test now, and it cost nothing to install](#the-dashboard-renders-in-a-test-now-and-it-cost-nothing-to-install)
   - [The read path has its own cold start, and it is not free](#the-read-path-has-its-own-cold-start-and-it-is-not-free)
   - [Two findings worth carrying forward](#two-findings-worth-carrying-forward)
 
@@ -1044,9 +1045,18 @@ Node's type stripping resolves neither a bare specifier nor the `@/` alias; and
 that in turn needs `allowImportingTsExtensions`, or `tsc` rejects what Node
 requires.
 
-What is covered is the pure logic — the list's URL state, the cursor, the
-formatting. What is not is anything that renders, which would need a DOM and
-therefore a dependency. That line is drawn on purpose rather than by neglect.
+`npm test` runs that suite and then a second one, `test:render`, which compiles
+the pages with the same TypeScript and renders them with the same `react-dom`
+the application already depends on. It is a separate script because it needs a
+compile the first suite exists to avoid: `.tsx` is the one thing Node's type
+stripping will not load, so the pages are emitted to `.render-out/` first and the
+tests run against that. Still no runner, still nothing installed —
+[the section on it](#the-dashboard-renders-in-a-test-now-and-it-cost-nothing-to-install)
+has the reasoning.
+
+Adding a render test means writing it in `test/render/`, giving the fixture the
+rows the page should receive, and asserting on what the page says. Assertions go
+against the text rather than the markup, so a restyle does not break them.
 
 `npm run build` deliberately succeeds without `DATABASE_URL`: the dashboard must
 never reach the database at build time, and CI enforces it.
@@ -1467,9 +1477,10 @@ what keeps the read path honest.
 | Backend | **166** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
-| Dashboard | **16** | `node --test` on TypeScript, no runner installed |
+| Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
+| Dashboard, rendered | **21** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **271** | the number on the badge at the top |
+| **Total** | **292** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them
@@ -1478,8 +1489,54 @@ expands to nine cases at run time, so a grep for `@Test` reports 157 where the
 runner reports 166. The runners are the authority and this table is what they
 said.
 
-The dashboard's count is the honest weak spot: it covers pure logic and nothing
-that renders, because rendering tests need a DOM and therefore a dependency.
+### The dashboard renders in a test now, and it cost nothing to install
+
+This section used to say the dashboard's count was the honest weak spot, because
+it covered pure logic and nothing that rendered. That was true and it mattered: a
+group page could have lost its stack trace panel, or the scorecard could have
+labelled the wrong detector active, and every test would still have passed.
+
+The reason it stayed that way was a real constraint rather than laziness.
+Rendering needs a DOM, a DOM needs a package, and `web/package.json` holding four
+runtime dependencies and no test runner is a property this file claims out loud.
+
+It turned out not to be a trade. Four things were checked before choosing:
+
+| | |
+|---|---|
+| Can `node --test` load a `.tsx`? | **No.** Type stripping does not transform JSX, so every approach needs a transform |
+| Is a transform already here? | **Yes.** `typescript` is a devDependency for `next build`, and `tsc` emits JSX under the existing `jsx: react-jsx` |
+| Is a renderer already here? | **Yes.** `react-dom/server` exposes `renderToStaticMarkup`, and `react-dom` is a runtime dependency |
+| Does `next/link` render outside Next? | **Yes.** It emits a plain `<a>` |
+
+So the pages are compiled by the TypeScript that was already installed, rendered
+by the `react-dom` that was already installed, and asserted with `node:test`,
+which is built in. **Nothing was added to either dependency list.**
+
+Three pieces of glue, all of them project code:
+
+- **`tsconfig.render-test.json`** emits to `.render-out/`. The root layout is
+  excluded: it loads a font through `next/font/google`, which only resolves
+  inside the Next build, and no page needs it — every page renders its own shell.
+- **`test/render/resolve.cjs`** teaches Node the `@/` alias, which `tsc` leaves
+  in the output because it is a bundler convention. It also points
+  `@/lib/queries` at the fixtures. That is the only seam a render test needs:
+  every page reaches the database through that module and through nothing else,
+  and `lib/db.ts` builds its handle lazily, so importing it opens no connection.
+- **`test/render/render.ts`** awaits the components before rendering. A page
+  awaits its query and then returns a shell that awaits its own, which React
+  refuses to render synchronously; resolving that is a server-components
+  runtime's job, and pulling one in would have been the dependency this avoided.
+
+The fixtures are annotated with the real exported query types, so `tsc` fails if
+a query's shape changes and the fixture does not. Fixtures that can drift are
+worse than none, because they keep passing.
+
+**What is still not covered.** No browser runs, so nothing here sees CSS, layout,
+or anything that only breaks at a real viewport width — those are still checked
+by hand and by looking. The tests assert on what the page says rather than on how
+it is arranged, which is the point: a restyle should not break them, and a
+deleted stack trace panel should.
 
 ### The read path has its own cold start, and it is not free
 

@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "npm run test:unit && npm run test:render",
+    "test:unit": "node --test \"test/*.test.ts\"",
+    "test:render": "node -e \"require('fs').rmSync('.render-out',{recursive:true,force:true})\" && tsc -p tsconfig.render-test.json && node --require ./test/render/resolve.cjs --test \".render-out/test/render/*.test.js\""
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
