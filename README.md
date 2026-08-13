@@ -49,6 +49,7 @@ that sleeps, and read through an interface that ships no JavaScript of its own.
   - [The interface, after the redesign](#the-interface-after-the-redesign)
   - [The list, once it could be filtered](#the-list-once-it-could-be-filtered)
   - [The detector comparison: predicted before it was run](#the-detector-comparison-predicted-before-it-was-run)
+  - [The result, and the detector it changed](#the-result-and-the-detector-it-changed)
   - [What is built and not yet switched on](#what-is-built-and-not-yet-switched-on)
   - [Tests, as they stand](#tests-as-they-stand)
   - [The read path has its own cold start, and it is not free](#the-read-path-has-its-own-cold-start-and-it-is-not-free)
@@ -269,14 +270,30 @@ group is new.
 | `zscore` | Standard deviations above the trailing mean | Divides by the spread, so a bursty group desensitises the detector watching it |
 | `poisson` | Upper-tail probability of the count under the rate recent hours imply | Ties variance to the rate, so a genuinely erratic group makes it over-fire |
 
-Poisson is active because the shape of the data is a counting process — small
-non-negative integers arriving in bursts — and it takes its spread from the rate
-rather than needing to be told one per group. Six errors is remarkable for a
-group that normally sees one and unremarkable for a group that normally sees
-fifty, and no per-group tuning says so.
+**`ewma` is active, and it was not the one this file argued for.**
 
-That is the argument. The scorecard is what decides whether the argument
-survives contact with the data.
+The argument was for Poisson, and it was a good one: the data is a counting
+process — small non-negative integers arriving in bursts — and Poisson takes its
+spread from the rate rather than needing to be told one per group. Six errors is
+remarkable for a group that normally sees one and unremarkable for a group that
+normally sees fifty, and no per-group tuning says so.
+
+The scorecard disagreed. Over 111 judged hours the two caught exactly the same
+surges — nine each, two missed each — and Poisson paid for it with **thirteen
+false positives against `ewma`'s four**. That is not a trade-off to weigh; on
+this data `ewma` is better on one axis and identical on the other.
+
+The reason is the one shape the argument did not account for. A group that
+degrades gradually never departs from its own local rate, but the flat mean
+Poisson fits lags the trend, so the gap between them reads as a surprise every
+hour for as long as the climb lasts. Eleven of Poisson's thirteen false
+positives are one service doing exactly that. `ewma` weighs recent hours more
+heavily, so the same climb moves its baseline with it and it says nothing.
+
+[The result and what it changed](#the-result-and-the-detector-it-changed) has the
+full table. The argument above is left standing rather than quietly rewritten,
+because the point of building the scorecard was to be able to lose an argument to
+it.
 
 ### Shadow mode
 
@@ -345,9 +362,11 @@ strip, and profiles chosen so the detectors have somewhere to disagree.
 | `payments-api` | calm, with two unmistakable spikes | the control: all three should agree |
 | `session-store` | busy for half a day, then dead | `ewma` — twelve quiet hours decay the baseline to the floor |
 
-**Two of the six aim at the detector currently in charge.** A scenario that only
-embarrassed the alternatives would be worth nothing as evidence for keeping
-`poisson`, and the point of the exercise is to find out rather than to confirm.
+**Two of the six aimed at the detector that was in charge.** A scenario that only
+embarrassed the alternatives would have been worth nothing as evidence for
+keeping `poisson`, and the point was to find out rather than to confirm. Both of
+those two landed, and it is the second of them — the ramp — that ended up
+deciding the comparison.
 
 The schedule is data, so what it should produce was worked out before it was
 sent: `tools/traffic/simulate.mjs` runs the same three detectors and the same
@@ -1278,7 +1297,7 @@ detectors and the same scoring statement over the schedule offline.
 |---|---|---|---|---|---|---|
 | `ewma` | 64% | 100% | 7 | 4 | 0 | 85 |
 | `zscore` | 33% | 29% | 2 | 4 | 5 | 85 |
-| `poisson` *(active)* | 41% | 100% | 7 | 10 | 0 | 79 |
+| `poisson` *(active at the time)* | 41% | 100% | 7 | 10 | 0 | 79 |
 
 96 judged buckets against the 3 the scorecard had before, and 18 hours where the
 three disagree.
@@ -1291,7 +1310,63 @@ erratic, and again on one whose trend the flat mean has not caught up with. If
 the live run agrees, the active detector changes. The measurement is the
 argument, or there was no reason to build the scorecard.
 
-*(Live result pending: the schedule runs to 2026-08-12T21:00Z.)*
+**Two corrections to that table, made before the result was known.** Checking the
+model against the collector's own scorecard mid-run found three places where the
+transcription was not faithful: it dropped evaluations with too little history
+behind them, which the collector records as "did not fire" rather than not at
+all; it started the history window at hour zero rather than at the group's first
+sighting; and it scored hours the collector had not reached yet. Corrected, the
+same schedule predicts `ewma` 60%/75%, `zscore` 33%/25% and `poisson` 38%/75%.
+The numbers moved and the ordering did not. The table above is left as it was
+published, because a prediction edited after the fact is a description.
+
+### The result, and the detector it changed
+
+Thirty hours, 2,163 events, 111 judged hours, nothing left awaiting hindsight.
+
+| Detector | Precision | Recall | TP | FP | FN | TN |
+|---|---|---|---|---|---|---|
+| `zscore` | **100%** | 45% | 5 | 0 | 6 | 100 |
+| **`ewma`** *(now active)* | **69%** | **82%** | 9 | 4 | 2 | 96 |
+| `poisson` *(was active)* | 41% | 82% | 9 | **13** | 2 | 87 |
+
+**`ewma` and `poisson` are not a trade-off.** They caught the same nine surges
+and missed the same two — identical recall, hour for hour — and `poisson` raised
+three times the false alarms getting there. There is no axis on which the
+incumbent is better, so `stacklight.detection.active` now reads `ewma`.
+
+**Where the thirteen came from.** Eleven are one service: a worker whose error
+rate climbs steadily for twenty hours and then levels off. Nothing in that is a
+departure from its own local rate, so the scorer calls none of it a surge — but
+the flat mean Poisson fits lags a rising trend, and the gap between the two reads
+as a fresh surprise every hour for as long as the climb lasts. `ewma` weighs
+recent hours more heavily, so the same climb carries its baseline with it and it
+stays quiet. That is the failure this file predicted for a rate-based detector,
+found on the shape that provokes it.
+
+**`zscore` never cried wolf and that is not enough.** Zero false positives across
+111 hours, and six of the eleven real surges missed. Every miss is the same
+group: a service idle for three hours then failing forty times, over and over.
+The spread that behaviour creates is the spread the z-score divides by, so the
+group desensitises the detector watching it and a genuine spike lands inside its
+own noise. For an alerting path, four false alarms cost less than four incidents
+nobody was told about.
+
+**What the run did not settle.** Eight of the thirty hours did not arrive as
+written — six dropped by the scheduler before the reconciliation existed, two
+sent twice — so this is the delivered schedule rather than the designed one, and
+`tools/traffic/compare.mjs` prints all three columns side by side for exactly
+that reason. Re-running the model over what actually arrived predicts 64%/78%,
+80%/44% and 35%/78%: the same ordering, the same decision, and close enough to
+the measured 69%/82%, 100%/45% and 41%/82% that the remaining gap is the scoring
+model's own imprecision rather than anything about the detectors. It is not an
+exact match and is not claimed as one.
+
+The sample is also small — eleven genuine surges is enough to separate three
+detectors on this data and not enough to be a general result about any of them.
+The claim here is narrow and stated as such: on thirty hours of a generated
+scenario, one detector was strictly better than the one in charge, so the one in
+charge changed.
 
 ### What is built and not yet switched on
 
