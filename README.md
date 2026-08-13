@@ -1,8 +1,24 @@
-# Stacklight
+<div align="center">
 
-Error ingestion and triage for small services.
+# 🔦 Stacklight
 
-**Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
+**Error ingestion and triage for small services — the kind that run on a free
+instance that falls asleep. Ten thousand events become a list of distinct faults,
+each one explaining why it grouped where it did, and the dashboard that reads them
+keeps working while the service that collects them is asleep.**
+
+[![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-271-success)](#tests-as-they-stand)
+[![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17%20on%20Neon-4169E1?logo=postgresql&logoColor=white)](https://neon.tech/)
+[![License](https://img.shields.io/github/license/YusufKosarDev/stacklight?color=yellow)](LICENSE)
+
+🔗 **Live: [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)**
+&nbsp;·&nbsp; no login, and it stays up when the collector does not
+
+</div>
 
 **Status: step 6.** Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
@@ -1452,6 +1468,15 @@ what keeps the read path honest.
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
 | Dashboard | **16** | `node --test` on TypeScript, no runner installed |
+| Traffic scenario | **18** | `node --test`, over the schedule as pure data |
+| **Total** | **271** | the number on the badge at the top |
+
+The badge is a written number rather than a live counter, and the CI `policy`
+job checks it against this table so the two cannot drift apart. Counting them
+automatically is harder than it looks: one backend test is parameterised and
+expands to nine cases at run time, so a grep for `@Test` reports 157 where the
+runner reports 166. The runners are the authority and this table is what they
+said.
 
 The dashboard's count is the honest weak spot: it covers pure logic and nothing
 that renders, because rendering tests need a DOM and therefore a dependency.

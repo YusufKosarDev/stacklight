@@ -67,6 +67,28 @@ jobs:
           fi
           echo "tracked files clean"
 
+      # The test count is on a badge, and a badge nobody checks is decoration that
+      # eventually becomes a lie. Counting them automatically is harder than it looks --
+      # one backend test is parameterised and expands to nine cases at run time, so a
+      # grep for @Test reports 157 where the runner reports 166 -- so the number is
+      # written down from what the runners said, and this makes sure the badge and the
+      # table in the README cannot drift apart.
+      - name: Test count
+        run: |
+          badge=$(grep -oE 'badge/tests-[0-9]+' README.md | head -1 | grep -oE '[0-9]+$')
+          total=$(awk '/^\| \*\*Total\*\*/{if (match($0, /\*\*[0-9]+\*\*/)) {print substr($0, RSTART+2, RLENGTH-4); exit}}' README.md)
+          sum=$(awk '/^### Tests, as they stand/{f=1}
+                     f && /^\| \*\*Total\*\*/{exit}
+                     f && /^\| [A-Z]/ {if (match($0, /\*\*[0-9]+\*\*/)) s+=substr($0, RSTART+2, RLENGTH-4)}
+                     END{print s}' README.md)
+
+          echo "badge=$badge  table total=$total  suites sum to=$sum"
+          if [ "$badge" != "$total" ] || [ "$sum" != "$total" ]; then
+            echo "::error::the tests badge, the total and the per-suite rows disagree"
+            exit 1
+          fi
+          echo "tests badge agrees with the table"
+
       - name: Secrets
         run: |
           # Password class excludes < and > so documented placeholders such as
