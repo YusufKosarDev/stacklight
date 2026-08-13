@@ -85,18 +85,27 @@ for the better part of a minute. Because the dashboard is a server component
 talking to Postgres directly, the ingestion service can be asleep, restarting or
 failing to deploy and the dashboard still renders in full.
 
-**Measured rather than asserted.** These two requests are seven seconds apart, on
-a service that had been idle for nineteen minutes:
+**Measured rather than asserted.** These two requests are **two seconds apart**:
 
 ```
-22:41:10   dashboard   200 in   0.40 s — 9 groups, charts, alerts, scorecard
-22:41:17   ingestion   200 in 104.20 s — cold start
+07:41:27   dashboard   200 in   0.39 s — 15 groups, charts, alerts, scorecard
+07:41:29   ingestion   200 in 104.38 s — cold start
 ```
 
 During the window in which the ingestion service could not answer at all, the
-dashboard served everything in under half a second. The full control, and the
-static check in CI that stops the read path quietly acquiring a dependency on the
-service that is supposed to be optional, are in
+dashboard served everything in under half a second. A running instance answers in
+0.19 to 0.53 seconds, measured repeatedly, so 104 seconds is not a slow reply —
+it is a service that was not there.
+
+Two things make this the better of the controls taken. The gap between the two
+requests is two seconds rather than the seven of the earlier one, which leaves
+less room for the argument that the service went to sleep in between. And it was
+taken **after** the run that changed the active detector, so it says the read path
+is still independent following the most recent work on it rather than at some
+earlier point.
+
+The full control, and the static check in CI that stops the read path quietly
+acquiring a dependency on the service that is supposed to be optional, are in
 [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it).
 It is re-measured whenever the read path changes.
 
@@ -1191,15 +1200,15 @@ missing is not the mechanism but traffic with a shape that trips it.
 | `POST /api/events` writes a row | 202, `stored: true` |
 | Request without the shared secret | 401 |
 | Dashboard renders groups | 9 groups, with sparklines and storage status |
-| **Dashboard while ingestion is asleep** | **200 in 0.40 s, full data** |
+| **Dashboard while ingestion is asleep** | **200 in 0.39–0.40 s, full data**, on two separate occasions |
 | Group list, with 24-hour sparklines per group | 0.40–0.58 s warm |
 | Group detail, trend + similarity + frame breakdown | 0.36–0.52 s across all three ranges |
 | Alerts and detector scorecard pages | 0.31–0.72 s |
 | *(the four rows above predate the redesign; re-measured below)* | |
 | First request after a fully idle period | 1.8–3.3 s (see below) |
 | Neon query time from `fra1` | 6–16 ms |
-| Ingestion cold start | **95, 104, 104, 104, 106, 114, 116 s**, measured seven times |
-| Ingestion when warm | 0.19–0.26 s |
+| Ingestion cold start | **95, 104, 104, 104, 104, 106, 114, 116 s**, measured eight times |
+| Ingestion when warm | 0.19–0.53 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
 
 ### The claim, and the control that backs it
@@ -1213,12 +1222,22 @@ that is supposed to be optional, so the claim is measured again rather than
 inherited.
 
 To confirm the service was genuinely asleep rather than merely idle, the next
-request after the measurement was timed. The two are seven seconds apart:
+request after the measurement was timed. Twice, months of work apart:
 
 ```
+07:41:27   dashboard   200 in 0.39 s — 15 groups, charts, alerts, scorecard
+07:41:29   ingestion   200 in 104.38 s          <- two seconds later
+
 22:41:10   dashboard   200 in 0.40 s — 9 groups, charts, alerts, scorecard
-22:41:17   ingestion   200 in 104.2 s
+22:41:17   ingestion   200 in 104.2 s           <- seven seconds later
 ```
+
+The first is the stronger of the two and is the one quoted at the top of this
+file. Two seconds between the requests leaves less room to argue the service
+happened to fall asleep in the gap, and it was taken after the traffic run that
+changed the active detector — so it speaks for the read path as it stands rather
+than as it stood two steps ago. The second is kept because a claim tested once is
+a claim tested once.
 
 So during the same window in which the ingestion service could not answer at all,
 the dashboard served everything — group list, sparklines, storage status, trend
@@ -1433,9 +1452,9 @@ visitor who arrives first does feel it.
 ### Two findings worth carrying forward
 
 **Cold starts are worse than the platform documents.** Render describes roughly
-a minute; the three measurements here were 95, 104 and 114 seconds. The first of
-them returned **503** rather than waiting — the platform gave up before the
-service finished starting.
+a minute; the first three measurements were 95, 104 and 114 seconds, and none of
+the eight now on record has come in under 95. The first returned **503** rather
+than waiting — the platform gave up before the service finished starting.
 
 This decides the shape of the client library in a later step. A caller must
 never block on this endpoint, and a single failed attempt cannot be treated as a
