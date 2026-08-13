@@ -1324,6 +1324,13 @@ published, because a prediction edited after the fact is a description.
 
 Thirty hours, 2,163 events, 111 judged hours, nothing left awaiting hindsight.
 
+**These are the numbers as the run ended.** The
+[live scorecard](https://stacklight-eosin.vercel.app/detectors) has moved since and
+will keep moving: verifying the switch afterwards meant sending twenty more events,
+which `ewma` fired on and which the scorer has been judging ever since — it reads
+75% / 86% at the time of writing. The table below is the sample the decision was made
+from, not a claim about what the page says today.
+
 | Detector | Precision | Recall | TP | FP | FN | TN |
 |---|---|---|---|---|---|---|
 | `zscore` | **100%** | 45% | 5 | 0 | 6 | 100 |

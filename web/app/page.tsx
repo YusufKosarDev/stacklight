@@ -167,6 +167,29 @@ export default async function Page({
         <p className="mt-1 text-sm text-ink-low">
           Errors grouped by fingerprint, newest first.
         </p>
+        {/*
+          Nobody uses this deployment, so every fault below was written rather than
+          reported. Muted on purpose: loud enough that no visitor mistakes this for
+          production traffic, quiet enough that it is not the first thing the page
+          is about.
+        */}
+        <p className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-ink-faint">
+          <span
+            aria-hidden
+            className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warn"
+          />
+          <span>
+            The faults below are a generated scenario, not real user traffic — written
+            to give three anomaly detectors something to disagree about.{" "}
+            <a
+              className="text-accent-hi underline decoration-edge-strong underline-offset-2 hover:decoration-current"
+              href="https://github.com/YusufKosarDev/stacklight#-the-traffic-behind-those-numbers-is-generated-not-real"
+            >
+              How it was built, and what it is for
+            </a>
+            .
+          </span>
+        </p>
       </header>
 
       {!result.ok && (

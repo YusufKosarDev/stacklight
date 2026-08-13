@@ -9,11 +9,18 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Alerts — Stacklight" };
 
+/**
+ * `disabled` is written when an alert is raised with no mail configured, and it is never
+ * revisited: turning mail on later must not deliver a backlog of everything that already
+ * happened. So the note is in the past tense. The present tense read as a claim about
+ * the deployment now, which stopped being true the moment mail was configured, while
+ * these rows kept saying it about alerts raised weeks earlier.
+ */
 const DELIVERY_NOTES: Record<string, string> = {
   sent: "emailed",
   pending: "queued",
   failed: "delivery gave up",
-  disabled: "recorded only, mail not configured",
+  disabled: "recorded only, mail was not configured at the time",
 };
 
 function AlertRow({ alert }: { alert: Alert }) {
