@@ -10,7 +10,17 @@ otherwise take the project down, watched by three detectors whose relative merit
 are measured rather than assumed, delivered by clients written around a collector
 that sleeps, and read through an interface that ships no JavaScript of its own.
 
-![The overview: stat tiles, the aggregate day, and the group list](docs/screenshots/overview.png)
+| | |
+|---|---|
+| ![A walk through the dashboard: faults, why they grouped, the detector scorecard, alerts](docs/media/tour.gif) | ![The dashboard answers in 0.80 s while the ingestion service takes 104.9 s to wake](docs/media/bet.gif) |
+| **What it is.** Faults, why each event grouped where it did, the scorecard that chose the active detector, and the alerts. ([webm](docs/media/tour.webm)) | **The bet, happening.** Both panes are live requests made at the same moment: the dashboard answers in **0.80 s**, the ingestion service takes **104.9 s** to wake. ([webm](docs/media/bet.webm)) |
+
+The second clip is the one worth thirty seconds. It is not staged and it is not a
+mock-up: the left pane is the deployed dashboard, the right is a real request to
+the real collector, and the counter is timing it. The wait is played at seven
+times speed with the speed on screen and the counter still reading true seconds —
+a hundred seconds does not fit in a loop anybody watches, and cutting it out
+silently would have made the clip an illustration rather than evidence.
 
 ---
 
@@ -108,6 +118,10 @@ The full control, and the static check in CI that stops the read path quietly
 acquiring a dependency on the service that is supposed to be optional, are in
 [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it).
 It is re-measured whenever the read path changes.
+
+The same thing on film, both halves live and neither of them staged, is the
+second clip at the top of this file — 0.80 seconds against 104.9, side by side,
+recorded in one pass.
 
 Everything else in this file follows from that bet. Grouping and rollups happen
 on the write path so the dashboard never has to compute them; retention runs on
@@ -664,6 +678,8 @@ scaffolded.** The same file still carried a light `--background` and a
 what looked like an aesthetic problem was a bug nobody had read the CSS closely
 enough to see.
 
+![The overview: stat tiles, the aggregate day, and the group list](docs/screenshots/overview.png)
+
 ### It ships no JavaScript of its own
 
 There are no client components — `grep -rn "use client" web/` returns nothing,
@@ -972,9 +988,13 @@ web/       Next.js 16 App Router, deployed to Vercel
     components/ui/     panel, stat tile, badge
   lib/        Neon handle, the read queries, the list's URL state
   test/       node --test over the pure logic, no runner installed
+tools/     traffic/  the generated scenario, its offline model and the comparison
+           media/    the two recordings at the top of this file
+docs/      media/, screenshots/, design/
 .githooks/ commit-msg policy, enabled with core.hooksPath
 .github/   CI: policy scan, backend and web tests, image build, web build
            sweep: the three-hourly trigger that wakes the collector
+           traffic: the scenario driver, dispatch-only now the run is over
 ```
 
 Grouping and rollup both run inline on the ingest path rather than behind a
