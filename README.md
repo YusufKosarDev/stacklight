@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-292-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-293-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -261,9 +261,17 @@ V2 carries its own signature function rather than editing the one v1 hashes.
 Editing that would change what v1 produces for events arriving tomorrow, which
 is exactly the silent re-pointing the version key exists to prevent.
 
-`stacklight.grouping.active-version` still reads 1. It moves once the report has
-been run against production and the merges and splits it lists are the ones
-expected — which is the entire point of having built the report first.
+`stacklight.grouping.active-version` still reads 1, and after 2,170 replayed
+events it is staying there. The report was run, and it says neither of those two
+changes does anything on this deployment: the first is aimed at a frame shape
+this parser does not produce, and the second leaves the one genuine over-split in
+the data exactly where it was. [The result](#what-is-built-and-not-yet-switched-on)
+has the numbers and the group that survives it.
+
+That is the entire point of having built the report first. The version was
+supposed to move once the merges and splits it listed were the ones expected;
+what it listed instead was nothing, twice, and the second time with enough data
+behind it to mean something.
 
 ### Similar groups
 
@@ -1449,21 +1457,72 @@ table above. One thing is left.
 **Grouping v2** is complete, tested and deliberately inactive.
 `stacklight.grouping.active-version` stays at 1.
 
-The replay report has now been run against production, which was the condition
-this file set for moving it. The answer it gave was not the expected one:
+The replay report was the condition this file set for moving it. It has been run
+twice, and the second run is the one that decides:
 
 ```
-{"version":2,"groupsTotal":9,"groupsCovered":7,"eventsReplayed":31,
- "merges":[],"splits":[]}
+first run    {"version":2,"groupsTotal":9, "groupsCovered":7, "eventsReplayed":31,
+              "merges":[],"splits":[]}
+
+after the    {"version":2,"groupsTotal":15,"groupsCovered":13,"eventsReplayed":2170,
+traffic run   "merges":[],"splits":[]}
 ```
 
-Nothing merges and nothing splits. That is not evidence for v2, it is the absence
-of evidence either way: 31 events across 7 covered groups contain no case that
-tells the two versions apart. V2 changes how many in-app frames decide identity
-and how a frame with a scope rather than a location is keyed, and this deployment
-has no fault that exercises either. So the gate holds for the reason it was built
-— the report is meant to say what would change, and "nothing observable" is not
-a mandate to change the key every group is filed under.
+The first run could not answer the question — 31 events contained no case that
+told the two versions apart, which is absence of evidence rather than evidence.
+The second replays **seventy times** as many events and covers every group that
+has a stack trace to replay; the two it misses are the two `no_frames` groups,
+which have nothing to replay by definition. Still nothing merges and nothing
+splits, and this time that means something.
+
+**Both of v2's changes were checked against what is actually stored, and neither
+does what it was written to do here.**
+
+*The frame-signature change cannot fire at all.* V2 keeps a frame's file beside
+its declaring class when the two differ, so that `Object.<anonymous>` in two
+unrelated JavaScript files stops collapsing into one signature. Every JavaScript
+frame in this database has no declaring class, so v2 falls back to `file#function`
+— which is exactly what v1 already produces. On the Java side the file always
+repeats the class, so v2 returns `class#function`, identical again. The change
+targets a shape this parser does not produce.
+
+*The frame-count change does not fix the one real over-split.* Groups 39 and 40
+are the same fault reached through two entry points, which is the case v2 exists
+for:
+
+```
+g39   frame 1   CheckoutController$CartService#total     same
+g39   frame 2   CheckoutController#boom                  differs
+g40   frame 1   CheckoutController$CartService#total     same
+g40   frame 2   CheckoutController#handled               differs
+```
+
+Same service, same exception, same frames 3 and 4. V1 splits them across eight
+frames and **v2 splits them too**, because the divergence is at frame two and v2
+hashes the first three.
+
+**The test for that merge was written to the algorithm rather than to the data.**
+`oneFaultReachedThroughTwoPathsBecomesOneGroup` builds two paths that diverge at
+frame four, and v2 merges them correctly. That shape did not occur once in 2,170
+events. The shape that did occur diverges one frame earlier, and a replay gate
+existing to find out is the only reason anybody knows.
+
+So v2 stays off, on evidence this time rather than for want of it. Switching it
+on would re-partition every group in public — new groups opening while old ones
+stop growing, on a dashboard somebody is reading — and buy zero merges, zero
+splits, and an over-split that survives the change.
+
+The obvious repair is a trap worth naming. Hashing a single frame would merge 39
+and 40, and v2's own reasoning rejects it: the top frame is often a shared helper
+that throws for unrelated reasons. Both facts are now tests, and dropping the
+limit to one fails both of them at once. What the data asks for is a different
+rule — ignoring handler and entry-point frames, say — rather than a smaller
+number, and that is a design question rather than a setting.
+
+**The code stays.** It is the working half of the versioning architecture, it is
+what the replay evaluates, and the finding above was only possible because two
+versions can run over the same events side by side. Deleting the subject of the
+experiment to tidy up would be the wrong lesson to take from it.
 
 That is not a loose end left by accident. The version moves on evidence by
 design, and the collector's address is deliberately absent from this repository —
@@ -1474,13 +1533,13 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **166** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Backend | **167** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
 | Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
 | Dashboard, rendered | **21** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **292** | the number on the badge at the top |
+| **Total** | **293** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them

@@ -83,6 +83,40 @@ class FingerprinterV2Tests {
     }
 
     @Test
+    void theOverSplitProductionActuallyProducedSurvivesV2() {
+        // The shape the replay found, and the reason v2 is still switched off.
+        //
+        // The test above builds two paths that diverge at the fourth frame, and v2
+        // merges them because it hashes three. Across 2,170 replayed events that shape
+        // never occurred. What did occur is this one: the same throw site reached from
+        // two handlers on the same controller, diverging at frame *two* -- inside the
+        // window v2 hashes, so v2 splits it exactly as v1 does.
+        //
+        // Kept as a test rather than a note because it is the load-bearing fact behind
+        // a decision, and because the obvious repair is a trap. Hashing one frame would
+        // merge these, and differentFaultsInTheSameTopFrameStayApart is the test saying
+        // why that is worse. If MAX_FRAMES is ever dropped to 1, one of these two fails.
+        String viaBoom =
+                """
+                \tat dev.stacklight.examples.CheckoutController$CartService.total(CheckoutController.java:64)
+                \tat dev.stacklight.examples.CheckoutController.boom(CheckoutController.java:38)
+                \tat java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+                """;
+        String viaHandled =
+                """
+                \tat dev.stacklight.examples.CheckoutController$CartService.total(CheckoutController.java:64)
+                \tat dev.stacklight.examples.CheckoutController.handled(CheckoutController.java:47)
+                \tat java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+                """;
+
+        // One fault, two entry points, and neither version puts them together.
+        assertThat(v1.compute(java(viaBoom)).hash())
+                .isNotEqualTo(v1.compute(java(viaHandled)).hash());
+        assertThat(v2.compute(java(viaBoom)).hash())
+                .isNotEqualTo(v2.compute(java(viaHandled)).hash());
+    }
+
+    @Test
     void differentFaultsInTheSameTopFrameStayApart() {
         // Three frames rather than one, because the top frame is often a shared helper.
         String fromCart =
