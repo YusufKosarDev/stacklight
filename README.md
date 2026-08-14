@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-293-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-295-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -72,6 +72,7 @@ silently would have made the clip an illustration rather than evidence.
   - [Grouping, on the live deployment](#grouping-on-the-live-deployment)
   - [Pipeline](#pipeline)
   - [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it)
+  - [What guards the bet when nobody is measuring it](#what-guards-the-bet-when-nobody-is-measuring-it)
   - [The interface, after the redesign](#the-interface-after-the-redesign)
   - [The list, once it could be filtered](#the-list-once-it-could-be-filtered)
   - [The detector comparison: predicted before it was run](#the-detector-comparison-predicted-before-it-was-run)
@@ -1020,6 +1021,7 @@ docs/      media/, screenshots/, design/
 .github/   CI: policy scan, backend and web tests, image build, web build
            sweep: the three-hourly trigger that wakes the collector
            traffic: the scenario driver, dispatch-only now the run is over
+           bet: the weekly check that the read path still needs nothing
 ```
 
 Grouping and rollup both run inline on the ingest path rather than behind a
@@ -1298,11 +1300,68 @@ the dashboard served everything — group list, sparklines, storage status, tren
 charts, frame breakdown, fingerprint input, similar groups, alerts and the
 detector scorecard — in under half a second.
 
-That is the architectural bet, tested rather than asserted. A static check backs
-the measurement: the CI `policy` job greps `web/` for `fetch(`, `axios`,
-`node-fetch`, `undici`, `XMLHttpRequest` and the ingestion host, and fails on a
-match. The measurement is still the real evidence; the grep is the part that does
-not depend on anyone remembering to take it.
+So during the same window in which the ingestion service could not answer at all,
+the dashboard served everything — group list, sparklines, storage status, trend
+charts, frame breakdown, fingerprint input, similar groups, alerts and the
+detector scorecard — in under half a second.
+
+### What guards the bet when nobody is measuring it
+
+Eight measurements, every one of them taken by hand. For a claim the rest of the
+project is built on, that is one distracted afternoon away from being untrue, so
+it is now guarded in three places — and the three are not equally good.
+
+**A grep, which is the weakest and runs first.** The `policy` job scans `web/`
+for ways out. It is cheap and it fails early, and it should not be mistaken for
+protection: a grep sees spelling. Two ways of breaking the claim were tried
+against the original pattern before it was widened — an alias, `const call =
+globalThis.fetch`, and a `node:https` import — and **both walked straight past
+it**. The pattern now covers those two and the next person will spell it a third
+way.
+
+**A dial-watch, which is the one that holds.**
+`web/test/render/isolation.test.ts` renders every page with
+`net.Socket.prototype.connect` wrapped, and asserts nothing was dialled. It sees
+the attempt rather than the spelling, so the alias and the `node:https` import
+are both caught. A second test loads the real query module, records the URLs it
+asks for, and asserts the only host is the database's — the one place the first
+test cannot see, since the render tests replace that module.
+
+The assertion is deliberately on **what was recorded, not on what threw.** Pages
+catch their own errors: `load()` logs a failure rather than letting it reach the
+reader, which is right. So a page doing `try { await fetch(collector) } catch {}`
+would render perfectly while quietly depending on a service that is supposed to
+be optional. Only the record gives that away.
+
+**A weekly request, which is the only one that tests the deployment.** Both
+checks above read the repository, and a repository stays green through a Vercel
+variable pointed at the wrong database or a Neon credential expiring. The `bet`
+workflow reads the dashboard, then asks the collector how long it takes to wake,
+and reports whether the claim held. It runs at 02:30 on a Monday for a reason:
+the sweep is the only thing that wakes the collector, on a fixed schedule, so it
+sleeps from about :24 past until :07 past the next third hour. Half past two is
+two hours into that window. It is not a coin toss dressed up as a test.
+
+It has three outcomes and says which. Cold collector and a fast, fully rendered
+dashboard is a pass. Cold collector and a slow or empty dashboard is a failure.
+A collector that was already awake is **inconclusive, and reported as
+inconclusive** — a run that could not test the claim must not be allowed to look
+like a run that tested it and found it holding.
+
+**What none of them catch,** stated because a guard nobody knows the edges of is
+worse than none:
+
+- A dashboard that is fast and renders the *wrong* data. Every check here asks
+  whether it answered, not whether it was right.
+- Anything that breaks between weekly runs. The window is seven days wide.
+- A query layer repointed at a different Postgres. The host check passes as long
+  as it is still a database.
+- A call whose URL is empty or unset. It opens no connection, so the dial-watch
+  sees nothing — though it is also not a dependency on anything until somebody
+  configures it.
+
+The measurements above remain the real evidence. These three are the part that
+does not depend on anyone remembering to take them.
 
 ### The interface, after the redesign
 
@@ -1537,9 +1596,9 @@ what keeps the read path honest.
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
 | Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
-| Dashboard, rendered | **21** | `node --test` on pages compiled by the TypeScript already here |
+| Dashboard, rendered | **23** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **293** | the number on the badge at the top |
+| **Total** | **295** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them
