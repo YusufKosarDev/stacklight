@@ -1,0 +1,217 @@
+/*
+  Deliberately plain. This is an operator tool on the service that can write, not the
+  dashboard -- and the dashboard is the part of this project anyone is meant to look at.
+  A second design system here would be a second thing to keep in step for no reader.
+*/
+
+:root {
+  color-scheme: dark;
+  --bg: #09090b;
+  --panel: #131316;
+  --line: #26262b;
+  --text: #ededf0;
+  --dim: #a0a0ab;
+  --accent: #a78bfa;
+  --open: #f0b429;
+  --regressed: #f87171;
+  --resolved: #4ade80;
+  --ignored: #a0a0ab;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  max-width: 68rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.lede {
+  margin: 0 0 2rem;
+  max-width: 46rem;
+  color: var(--dim);
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+section {
+  margin-bottom: 2rem;
+}
+
+.key {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.7rem 0 0.6rem;
+}
+
+input,
+select {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+#key-input {
+  flex: 1 1 22rem;
+}
+
+button {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #1d1d22;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--dim);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.bar h2 {
+  margin-right: auto;
+}
+
+.bar label {
+  font-size: 0.85rem;
+  color: var(--dim);
+}
+
+#message {
+  margin: 0 0 0.75rem;
+  min-height: 1.4em;
+  font-size: 0.9rem;
+  color: var(--dim);
+}
+
+#message.error {
+  color: var(--regressed);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--dim);
+}
+
+.num {
+  text-align: right;
+}
+
+td.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.title {
+  max-width: 30rem;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  font-weight: 600;
+}
+
+.status-open {
+  color: var(--open);
+}
+.status-regressed {
+  color: var(--regressed);
+}
+.status-resolved {
+  color: var(--resolved);
+}
+.status-ignored {
+  color: var(--ignored);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.actions button {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.85rem;
+}
+
+.actions input {
+  padding: 0.3rem 0.45rem;
+  width: 7rem;
+  font-size: 0.85rem;
+}
+
+.empty {
+  padding: 1.5rem 0.6rem;
+  color: var(--dim);
+}

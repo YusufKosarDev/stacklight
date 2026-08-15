@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!--
+      This page is reachable without a key and that is deliberate: it carries no data.
+      Everything it shows arrives from /api/groups, which the console key guards. So the
+      shell being public leaks nothing but the fact that a console exists.
+
+      The script and stylesheet are separate files rather than inline so this policy can
+      refuse inline execution outright. Group titles come from error messages somebody
+      else's application sent, so the page renders every value with textContent and never
+      builds markup from one -- the policy is the second line of that defence, not the
+      first.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+    />
+    <meta name="robots" content="noindex, nofollow" />
+
+    <title>Stacklight triage</title>
+    <link rel="stylesheet" href="console.css" />
+  </head>
+
+  <body>
+    <header>
+      <h1>Triage</h1>
+      <p class="lede">
+        Changes group status on the ingestion service. The dashboard reads Postgres with a
+        role holding nothing but <code>SELECT</code>, so it cannot do this and this page
+        cannot be part of it.
+      </p>
+    </header>
+
+    <section class="key" aria-labelledby="key-heading">
+      <h2 id="key-heading">Console key</h2>
+      <form id="key-form" autocomplete="off">
+        <input
+          type="password"
+          id="key-input"
+          name="key"
+          placeholder="X-Stacklight-Console-Key"
+          aria-label="Console key"
+          spellcheck="false"
+        />
+        <button type="submit">Use key</button>
+        <button type="button" id="forget">Forget</button>
+      </form>
+      <p class="hint">
+        Held for this tab only and dropped when it closes. Not the ingest key — that one is
+        deployed to every application reporting errors and does not open this page.
+      </p>
+    </section>
+
+    <section aria-labelledby="groups-heading">
+      <div class="bar">
+        <h2 id="groups-heading">Groups</h2>
+        <label for="filter">Status</label>
+        <select id="filter">
+          <option value="">all</option>
+          <option value="open">open</option>
+          <option value="regressed">regressed</option>
+          <option value="resolved">resolved</option>
+          <option value="ignored">ignored</option>
+        </select>
+        <button type="button" id="reload">Reload</button>
+      </div>
+
+      <p id="message" role="status"></p>
+
+      <table id="groups">
+        <thead>
+          <tr>
+            <th scope="col">id</th>
+            <th scope="col">service</th>
+            <th scope="col">fault</th>
+            <th scope="col">status</th>
+            <th scope="col" class="num">events</th>
+            <th scope="col">last seen</th>
+            <th scope="col">move to</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+
+    <script src="console.js"></script>
+  </body>
+</html>

@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-295-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-307-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -56,6 +56,7 @@ silently would have made the clip an illustration rather than evidence.
   - [What the trigger costs, and why the cadence is what it is](#what-the-trigger-costs-and-why-the-cadence-is-what-it-is)
 - [Volume, and the limit that ends the project](#volume-and-the-limit-that-ends-the-project) — retention without a scheduler, because a timer cannot fire into a sleeping process
 - [Regression detection](#regression-detection) — an event landing on a group somebody called resolved
+  - [The console that does it, and where it had to live](#the-console-that-does-it-and-where-it-had-to-live)
 - [The interface](#the-interface) — a dashboard that ships no JavaScript of its own
 - [The clients](#the-clients) — Java and Node, built around a collector that takes a hundred seconds to wake
 - [Connection strategy](#connection-strategy) — why the two halves talk to the same database differently
@@ -743,6 +744,58 @@ dashboard cannot.
 PATCH /api/groups/{id}   {"status": "resolved", "release": "1.7.0"}
 ```
 
+### The console that does it, and where it had to live
+
+For five steps that endpoint had no interface, which meant triage was a `curl`
+command. The constraint above is what decided where the interface went: not into
+the dashboard, because the whole argument for the read path is that its database
+role cannot write. So the console is served by the ingestion service itself, at
+`/console.html`.
+
+**It ships as three static files and no new dependency.** A template engine was
+the obvious answer and does not survive the question it has to answer, which is
+how the page authenticates. A browser following a link cannot send a custom
+header, so a server-rendered page needs a session, a login form and a CSRF token
+before it can render a single row. The static shell sidesteps all of it by
+reusing the guard that already exists: the page is empty, and the script asks
+`/api/groups` for its contents with the key in a header.
+
+That the shell is empty is what makes it safe to serve on a public URL without a
+key. It contains no group, no service and no title — nothing but the controls.
+Everything a reader could want out of it is one authenticated request away.
+
+**A second key, because the two jobs are not the same privilege.** The ingest key
+is deployed to every installation that reports errors: both example applications,
+the workflows, anything anyone wires an SDK into. One of those leaking is a quota
+problem, which the guard has always been about. It should not also be a way to
+mark faults resolved. So `/api/groups` reads `X-Stacklight-Console-Key` and
+everything else under `/api` still reads `X-Stacklight-Key`, and the tests that
+matter most are the two asserting each key is refused by the other's endpoint.
+
+The rules are matched in order with the broadest last, and that last one is a
+catch-all on purpose: an endpoint added under `/api` later and forgotten there is
+guarded by the ingest key rather than being public.
+
+**Group titles are attacker-controlled, and the console renders them.** A title
+is derived from the error message an application sent, so its text is chosen by
+whoever holds an ingest key rather than by anyone reading the console. A single
+`innerHTML` would turn a reported error into script running in the operator's
+browser, in the tab holding the console key. Every value goes in through
+`textContent`, the page's content policy refuses inline execution, and a test
+asserts the shipped script contains no `innerHTML` — because a rule this quiet is
+one careless line from lapsing.
+
+**There is no rate limiter and that is a decision.** The key is compared in
+constant time and a blank one rejects everything, so guessing it is not the
+threat. The threat this plan actually has is the quota, and any unauthenticated
+request already wakes the instance — `/actuator/health` is the uptime-ping target
+and asks for nothing. A limiter would add per-instance state to close a hole that
+is open somewhere else regardless.
+
+The dashboard does not link to it, and cannot: the CI `policy` job fails the build
+if `onrender.com` appears anywhere under `web/`, which is the same check that
+keeps the read path from acquiring a dependency on the service.
+
 ---
 
 ## The interface
@@ -1051,6 +1104,21 @@ in-process timer, for the reason above.
 `GET /api/grouping/replay?version=N` — what version N would do to the groups that
 already exist. Read-only.
 
+`GET /api/groups?status=&limit=` and `PATCH /api/groups/{id}` — the triage
+console's list and its writes. **These two require `X-Stacklight-Console-Key`
+instead**, and the ingest key is refused on both. The split is deliberate and the
+reasoning is in [the section on the console](#the-console-that-does-it-and-where-it-had-to-live):
+the ingest key goes to every installation that reports errors, and one of those
+leaking should not also be a way to change what has been triaged.
+
+```json
+[ { "id": 12, "service": "checkout-api", "title": "IllegalStateException: ...",
+    "status": "open", "eventCount": 304, "lastSeen": "2026-08-15T09:41:02Z" } ]
+```
+
+`GET /console.html` — the console itself. No key: it carries no data, and the
+script fetches everything it shows from the endpoint above.
+
 `GET /actuator/health` — no authentication, no database access.
 
 ---
@@ -1060,10 +1128,11 @@ already exist. Read-only.
 ```
 backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
   grouping/   parsers, normalizer, two fingerprinter versions, replay report
-  ingest/     endpoint, guard, event / group / rollup persistence, status, sweep
+  ingest/     endpoint, two-key guard, event / group / rollup persistence, sweep
   retention/  sweep, adaptive window, startup catch-up
   detection/  three detectors, shadow recording, self-scoring, silence
   alerting/   outbox, cooldown, best-effort mail delivery
+  static/     the triage console: an empty shell, its stylesheet and its script
 web/       Next.js 16 App Router, deployed to Vercel
   app/        groups, charts, alerts, detector scorecard, how grouping works
     components/shell/  sidebar, nav counts, the frame every route renders into
@@ -1174,7 +1243,7 @@ shape.
 | Service | Key |
 |---|---|
 | Render | `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, `INGEST_API_KEY`, `JAVA_TOOL_OPTIONS` |
-| Render, optional | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
+| Render, optional | `CONSOLE_API_KEY`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
 | Vercel | `DATABASE_URL` |
 | GitHub secrets | `COLLECTOR_URL`, `INGEST_API_KEY` — the sweep no-ops without them, so a fork does not fail every three hours |
 
@@ -1184,6 +1253,12 @@ The mail variables are optional in the strict sense: with none of them set,
 detection still runs and alerts are still recorded, they are simply marked
 `disabled` instead of queued. `MAIL_PORT` defaults to **2525** rather than 587,
 because Render blocks the usual submission port outbound.
+
+`CONSOLE_API_KEY` is optional in a different sense: left blank, `/console.html`
+is still served and every request it makes is refused, so a deployment that never
+wanted a console does not accidentally have one. It should not be the same value
+as `INGEST_API_KEY` — the point of the second key is that the first one is
+deployed to every application reporting errors.
 
 `/actuator/health` deliberately checks neither the database nor the mail server.
 It is the liveness target and the deploy gate, so it must not be able to fail
@@ -1684,13 +1759,13 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **167** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Backend | **179** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
 | Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
 | Dashboard, rendered | **23** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **295** | the number on the badge at the top |
+| **Total** | **307** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them
