@@ -581,6 +581,9 @@ The arithmetic is unkind. A wake costs the 104-second cold start plus the fiftee
 minutes Render waits before idling the instance out again — about 16.7 minutes,
 whether the sweep found anything or not.
 
+**What each cadence would cost this service**, which is not the same thing as what
+the workspace has left:
+
 | Cadence | Wakes/day | Duty cycle | Hours/month |
 |---|---|---|---|
 | Hourly | 24 | 27.9% | **208** |
@@ -591,6 +594,59 @@ At hourly, this service alone claimed more than a quarter of the workspace
 allowance — and it claimed it to keep a dashboard current that does not need the
 service running at all. That is the wrong thing to spend a quota on. Three-hourly
 buys the same signal for a third of the price.
+
+**What it actually cost, measured.** That table models the sweep and nothing else,
+so it was worth checking against the platform. Taken from Render's metrics for 14
+August — one full day, after the traffic run had finished, sampled every five
+minutes:
+
+| | |
+|---|---|
+| Wake windows | **9** — eight sweeps, one deploy |
+| Awake, sampled | ~170 minutes |
+| Awake, counting the cold starts before the first sample | ~185 minutes |
+| Duty cycle | **12.8%** |
+| At that rate | **~90 hours a month** |
+
+The nine windows line up with the sweep's own run times to the minute. So the real
+figure runs above the modelled 9.3%, and the gap is not the sweep: it is deploys
+and the wakes CI causes, which the table never counted. Stated as what it is —
+one day, sampled at five-minute granularity, projected forward. Not a measured
+monthly total.
+
+**The allowance is shared, and this repository does not control it.** Five free
+web services run in this workspace and the 750 hours belong to all of them
+together. Measured over the first fifteen days of August: **one of the other four
+never slept at all for eleven days**, taking roughly a third of the month's
+allowance on its own before going quiet. Of the remaining three, two woke fewer
+than five times between them and one did not run once. Those are lower bounds read
+from sampled metrics rather than off a bill — a wake that begins and ends between
+two samples does not appear.
+
+Which turns the obvious conclusion around, and the honest sentence is narrower
+than the one this section used to imply. This service is a minority consumer:
+**Stacklight spends something like 90 hours of the 750, and that is the only part
+of the number this repository decides.** Whether the workspace runs out is decided
+by the sum, and the sum is not in this file. What settles it is the current
+period's free instance hours on Render's billing page; everything above is
+inferred from metrics rather than read from an invoice.
+
+**What running out would do.** Every free service in the workspace stops until the
+first of the next month, and the collector is one of them.
+
+**The dashboard is not.** It runs on Vercel against Neon and never touches Render,
+so an exhausted allowance does not take this project down — it stops ingestion and
+leaves the read path serving everything already collected. Nobody planned that as
+a contingency. It falls out of the read path not needing the ingestion service,
+which is the property the rest of this file is built on.
+
+There is no version of this that Stacklight solves by itself. Spending less helps
+the pool and guarantees nothing, because whatever it saves another service can
+take. Six-hourly would save about 40 hours a month, which against a pool where one
+service took 250 of them in eleven days does not change the outcome: it makes this
+service a slightly smaller minority and doubles the delay on noticing a reporter
+has gone quiet. **The cadence stays at three hours.** The lever that would matter
+is not in this repository.
 
 **What the slower cadence costs is latency, and only latency.** The condition
 being tested is a level rather than an edge: "no events in the last three hours"
