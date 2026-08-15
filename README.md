@@ -1018,7 +1018,8 @@ tools/     traffic/  the generated scenario, its offline model and the compariso
            media/    the two recordings at the top of this file
 docs/      media/, screenshots/, design/
 .githooks/ commit-msg policy, enabled with core.hooksPath
-.github/   CI: policy scan, backend and web tests, image build, web build
+.github/   CI: policy scan, lockfile guard, backend and web tests, image, build
+           scripts/lockfile-guard.mjs: the check that npm cannot rewrite this
            sweep: the three-hourly trigger that wakes the collector
            traffic: the scenario driver, dispatch-only now the run is over
            bet: the weekly check that the read path still needs nothing
@@ -1070,6 +1071,41 @@ against the text rather than the markup, so a restyle does not break them.
 
 `npm run build` deliberately succeeds without `DATABASE_URL`: the dashboard must
 never reach the database at build time, and CI enforces it.
+
+### The lockfile cannot be regenerated, and npm will not say so
+
+`npm ci` is safe. **`npm install` and `npm audit fix` are not**, and the damage
+they do here is quiet enough to be worth the paragraph.
+
+Both rewrite `web/package-lock.json` from the machine they run on. Optional
+entries that machine has no use for — the Linux and wasm binaries, on a laptop
+that is neither — get pruned, and the packages that depend on them are left
+exactly as they were. The result is a file that names a dependency it no longer
+contains: `@emnapi/core` and `@emnapi/runtime` leave while `@img/sharp-wasm32`,
+`@tailwindcss/oxide-wasm32-wasi` and `@unrs/resolver-binding-wasm32-wasi` go on
+requiring them. That tree cannot be installed on Linux, which is where this is
+built and deployed.
+
+It has happened twice, and neither time did npm mention it. The install prints
+`found 0 vulnerabilities` and exits zero.
+
+**So a dependency change here is a hand edit.** Look up the version, the tarball
+URL and the integrity hash, change those fields and nothing else — the nanoid
+advisory was closed in three lines that way. Then run `npm ci`, which installs
+from the file rather than rewriting it, and check the diff is still only what you
+typed.
+
+The `policy` job runs [`lockfile-guard.mjs`](.github/scripts/lockfile-guard.mjs)
+on every push, and it is worth knowing which half of it does the work. The
+Linux-coverage assertion is the cheap one and it caught neither rewrite: the
+Linux count never moved, because `@emnapi` carries no platform in its name. What
+holds is the other assertion — every dependency the file names has to resolve
+inside it — because it looks at the consequence rather than at any package in
+particular. Run it yourself with:
+
+```bash
+node .github/scripts/lockfile-guard.mjs
+```
 
 ---
 

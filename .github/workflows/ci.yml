@@ -130,6 +130,27 @@ jobs:
           fi
           echo "read path talks to Postgres only"
 
+      # web/package-lock.json cannot be regenerated on a machine that does not need
+      # every platform's binaries. npm prunes the optional entries it cannot use
+      # locally and leaves the packages depending on them alone, so the file ends up
+      # naming a dependency it no longer contains -- and reports success while doing
+      # it. It has been produced twice here, both times dropping @emnapi/core and
+      # @emnapi/runtime while three packages went on requiring them.
+      #
+      # The script makes two assertions and they are not equally good, the same way
+      # the read-path grep above is not the equal of the dial-watch that backs it.
+      #
+      # The Linux-coverage half is the cheap one and it would not have caught either
+      # of the two rewrites: through both of them the Linux count never moved, because
+      # @emnapi carries no platform in its name. It is there for the other shape of
+      # the accident -- a file that kept the binaries of whoever ran npm.
+      #
+      # What holds is the coherence half: every dependency the file names must resolve
+      # inside it. That sees the consequence rather than any package in particular, so
+      # the next thing npm prunes is caught without anybody having listed it here.
+      - name: Lockfile
+        run: node .github/scripts/lockfile-guard.mjs
+
   backend:
     name: backend
     runs-on: ubuntu-latest
