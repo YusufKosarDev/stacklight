@@ -97,6 +97,31 @@ export function Sidebar({
           Renders whether or not the ingestion service is awake.
         </span>
       </div>
+
+      {/*
+        Said on every page rather than once on the front one. Everything here is a
+        written scenario, and a dashboard full of convincing-looking faults should
+        say so wherever somebody happens to land on it.
+      */}
+      <div className="hidden border-t border-edge pt-4 lg:block">
+        <span className="block text-[10px] font-medium uppercase tracking-[0.09em] text-ink-faint">
+          Data
+        </span>
+        <span className="mt-1.5 flex items-center gap-2 text-[11px] text-ink">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
+          <span>Generated scenario</span>
+        </span>
+        <span className="mt-1.5 block text-[10px] leading-relaxed text-ink-faint">
+          Not real user traffic.{" "}
+          <a
+            className="text-accent-hi underline decoration-edge-strong underline-offset-2 hover:decoration-current"
+            href="https://github.com/YusufKosarDev/stacklight#-the-traffic-behind-those-numbers-is-generated-not-real"
+          >
+            Why, and what it is for
+          </a>
+          .
+        </span>
+      </div>
     </div>
   );
 }

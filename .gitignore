@@ -20,6 +20,9 @@ build/
 next-env.d.ts
 *.tsbuildinfo
 
+# Emitted by the dashboard render tests: pages compiled so a test can render them.
+.render-out/
+
 # --- tooling -------------------------------------------------------------
 .vercel
 .idea/

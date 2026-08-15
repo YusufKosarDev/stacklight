@@ -1,0 +1,48 @@
+{
+  // Compiles the pages so they can be rendered in a test, using the TypeScript that is
+  // already here for `next build`. Nothing is installed for this: tsc emits the JSX,
+  // react-dom/server renders it, and node:test asserts. The dashboard's dependency list
+  // is a property this project claims out loud, and a render test is a poor reason to
+  // spend it.
+  //
+  // Separate from tsconfig.json rather than folded into it, because the two want
+  // opposite things. The main config exists to type-check what Next builds and never
+  // emits; this one exists to emit.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".render-out",
+
+    // Newer than the app's ES2017, which is set for the browsers Next targets. Nothing
+    // here reaches a browser -- it runs on the Node that is running the tests -- and the
+    // older target rejects a dotall regex, which is how an assertion spans a detector's
+    // name and the number beside it.
+    "target": "ES2022",
+
+    // Node has to be able to load the result, so the emit targets Node's resolver rather
+    // than a bundler's. That also rules out importing a `.ts` extension, which the main
+    // config allows because node --test reads those files directly.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": false,
+    "verbatimModuleSyntax": false,
+
+    // Emit even when the type checker complains. `next build` is the gate for types and
+    // runs on every commit; making the render tests a second, differently-configured
+    // type gate would mean fixing the same error twice in two dialects.
+    "noEmitOnError": false,
+    "incremental": false,
+    "declaration": false,
+
+    // Next's plugin needs the Next build to be running; this compile is a plain tsc.
+    "plugins": []
+  },
+  "include": ["app/**/*.ts", "app/**/*.tsx", "lib/**/*.ts", "test/render/**/*.ts"],
+
+  // The root layout is not compiled and not rendered. It loads a font through
+  // next/font/google, which only resolves inside the Next build, and it is typed with
+  // LayoutProps, a global Next generates during that build. Neither is available to a
+  // plain tsc, and neither is what these tests are for: every page renders its own
+  // Shell, so the thing under test is reached without the layout that wraps it.
+  "exclude": ["node_modules", ".next", ".render-out", "app/layout.tsx"]
+}

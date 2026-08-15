@@ -1,8 +1,24 @@
-# Stacklight
+<div align="center">
 
-Error ingestion and triage for small services.
+# 🔦 Stacklight
 
-**Live:** [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)
+**Error ingestion and triage for small services — the kind that run on a free
+instance that falls asleep. Ten thousand events become a list of distinct faults,
+each one explaining why it grouped where it did, and the dashboard that reads them
+keeps working while the service that collects them is asleep.**
+
+[![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-295-success)](#tests-as-they-stand)
+[![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17%20on%20Neon-4169E1?logo=postgresql&logoColor=white)](https://neon.tech/)
+[![License](https://img.shields.io/github/license/YusufKosarDev/stacklight?color=yellow)](LICENSE)
+
+🔗 **Live: [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)**
+&nbsp;·&nbsp; no login, and it stays up when the collector does not
+
+</div>
 
 **Status: step 6.** Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
@@ -10,7 +26,17 @@ otherwise take the project down, watched by three detectors whose relative merit
 are measured rather than assumed, delivered by clients written around a collector
 that sleeps, and read through an interface that ships no JavaScript of its own.
 
-![The overview: stat tiles, the aggregate day, and the group list](docs/screenshots/overview.png)
+| | |
+|---|---|
+| ![A walk through the dashboard: faults, why they grouped, the detector scorecard, alerts](docs/media/tour.gif) | ![The dashboard answers in 0.80 s while the ingestion service takes 104.9 s to wake](docs/media/bet.gif) |
+| **What it is.** Faults, why each event grouped where it did, the scorecard that chose the active detector, and the alerts. ([webm](docs/media/tour.webm)) | **The bet, happening.** Both panes are live requests made at the same moment: the dashboard answers in **0.80 s**, the ingestion service takes **104.9 s** to wake. ([webm](docs/media/bet.webm)) |
+
+The second clip is the one worth thirty seconds. It is not staged and it is not a
+mock-up: the left pane is the deployed dashboard, the right is a real request to
+the real collector, and the counter is timing it. The wait is played at seven
+times speed with the speed on screen and the counter still reading true seconds —
+a hundred seconds does not fit in a loop anybody watches, and cutting it out
+silently would have made the clip an illustration rather than evidence.
 
 ---
 
@@ -46,11 +72,14 @@ that sleeps, and read through an interface that ships no JavaScript of its own.
   - [Grouping, on the live deployment](#grouping-on-the-live-deployment)
   - [Pipeline](#pipeline)
   - [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it)
+  - [What guards the bet when nobody is measuring it](#what-guards-the-bet-when-nobody-is-measuring-it)
   - [The interface, after the redesign](#the-interface-after-the-redesign)
   - [The list, once it could be filtered](#the-list-once-it-could-be-filtered)
   - [The detector comparison: predicted before it was run](#the-detector-comparison-predicted-before-it-was-run)
+  - [The result, and the detector it changed](#the-result-and-the-detector-it-changed)
   - [What is built and not yet switched on](#what-is-built-and-not-yet-switched-on)
   - [Tests, as they stand](#tests-as-they-stand)
+  - [The dashboard renders in a test now, and it cost nothing to install](#the-dashboard-renders-in-a-test-now-and-it-cost-nothing-to-install)
   - [The read path has its own cold start, and it is not free](#the-read-path-has-its-own-cold-start-and-it-is-not-free)
   - [Two findings worth carrying forward](#two-findings-worth-carrying-forward)
 
@@ -84,20 +113,33 @@ for the better part of a minute. Because the dashboard is a server component
 talking to Postgres directly, the ingestion service can be asleep, restarting or
 failing to deploy and the dashboard still renders in full.
 
-**Measured rather than asserted.** These two requests are seven seconds apart, on
-a service that had been idle for nineteen minutes:
+**Measured rather than asserted.** These two requests are **two seconds apart**:
 
 ```
-22:41:10   dashboard   200 in   0.40 s — 9 groups, charts, alerts, scorecard
-22:41:17   ingestion   200 in 104.20 s — cold start
+07:41:27   dashboard   200 in   0.39 s — 15 groups, charts, alerts, scorecard
+07:41:29   ingestion   200 in 104.38 s — cold start
 ```
 
 During the window in which the ingestion service could not answer at all, the
-dashboard served everything in under half a second. The full control, and the
-static check in CI that stops the read path quietly acquiring a dependency on the
-service that is supposed to be optional, are in
+dashboard served everything in under half a second. A running instance answers in
+0.19 to 0.53 seconds, measured repeatedly, so 104 seconds is not a slow reply —
+it is a service that was not there.
+
+Two things make this the better of the controls taken. The gap between the two
+requests is two seconds rather than the seven of the earlier one, which leaves
+less room for the argument that the service went to sleep in between. And it was
+taken **after** the run that changed the active detector, so it says the read path
+is still independent following the most recent work on it rather than at some
+earlier point.
+
+The full control, and the static check in CI that stops the read path quietly
+acquiring a dependency on the service that is supposed to be optional, are in
 [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it).
 It is re-measured whenever the read path changes.
+
+The same thing on film, both halves live and neither of them staged, is the
+second clip at the top of this file — 0.80 seconds against 104.9, side by side,
+recorded in one pass.
 
 Everything else in this file follows from that bet. Grouping and rollups happen
 on the write path so the dashboard never has to compute them; retention runs on
@@ -220,9 +262,17 @@ V2 carries its own signature function rather than editing the one v1 hashes.
 Editing that would change what v1 produces for events arriving tomorrow, which
 is exactly the silent re-pointing the version key exists to prevent.
 
-`stacklight.grouping.active-version` still reads 1. It moves once the report has
-been run against production and the merges and splits it lists are the ones
-expected — which is the entire point of having built the report first.
+`stacklight.grouping.active-version` still reads 1, and after 2,170 replayed
+events it is staying there. The report was run, and it says neither of those two
+changes does anything on this deployment: the first is aimed at a frame shape
+this parser does not produce, and the second leaves the one genuine over-split in
+the data exactly where it was. [The result](#what-is-built-and-not-yet-switched-on)
+has the numbers and the group that survives it.
+
+That is the entire point of having built the report first. The version was
+supposed to move once the merges and splits it listed were the ones expected;
+what it listed instead was nothing, twice, and the second time with enough data
+behind it to mean something.
 
 ### Similar groups
 
@@ -269,14 +319,30 @@ group is new.
 | `zscore` | Standard deviations above the trailing mean | Divides by the spread, so a bursty group desensitises the detector watching it |
 | `poisson` | Upper-tail probability of the count under the rate recent hours imply | Ties variance to the rate, so a genuinely erratic group makes it over-fire |
 
-Poisson is active because the shape of the data is a counting process — small
-non-negative integers arriving in bursts — and it takes its spread from the rate
-rather than needing to be told one per group. Six errors is remarkable for a
-group that normally sees one and unremarkable for a group that normally sees
-fifty, and no per-group tuning says so.
+**`ewma` is active, and it was not the one this file argued for.**
 
-That is the argument. The scorecard is what decides whether the argument
-survives contact with the data.
+The argument was for Poisson, and it was a good one: the data is a counting
+process — small non-negative integers arriving in bursts — and Poisson takes its
+spread from the rate rather than needing to be told one per group. Six errors is
+remarkable for a group that normally sees one and unremarkable for a group that
+normally sees fifty, and no per-group tuning says so.
+
+The scorecard disagreed. Over 111 judged hours the two caught exactly the same
+surges — nine each, two missed each — and Poisson paid for it with **thirteen
+false positives against `ewma`'s four**. That is not a trade-off to weigh; on
+this data `ewma` is better on one axis and identical on the other.
+
+The reason is the one shape the argument did not account for. A group that
+degrades gradually never departs from its own local rate, but the flat mean
+Poisson fits lags the trend, so the gap between them reads as a surprise every
+hour for as long as the climb lasts. Eleven of Poisson's thirteen false
+positives are one service doing exactly that. `ewma` weighs recent hours more
+heavily, so the same climb moves its baseline with it and it says nothing.
+
+[The result and what it changed](#the-result-and-the-detector-it-changed) has the
+full table. The argument above is left standing rather than quietly rewritten,
+because the point of building the scorecard was to be able to lose an argument to
+it.
 
 ### Shadow mode
 
@@ -345,9 +411,11 @@ strip, and profiles chosen so the detectors have somewhere to disagree.
 | `payments-api` | calm, with two unmistakable spikes | the control: all three should agree |
 | `session-store` | busy for half a day, then dead | `ewma` — twelve quiet hours decay the baseline to the floor |
 
-**Two of the six aim at the detector currently in charge.** A scenario that only
-embarrassed the alternatives would be worth nothing as evidence for keeping
-`poisson`, and the point of the exercise is to find out rather than to confirm.
+**Two of the six aimed at the detector that was in charge.** A scenario that only
+embarrassed the alternatives would have been worth nothing as evidence for
+keeping `poisson`, and the point was to find out rather than to confirm. Both of
+those two landed, and it is the second of them — the ramp — that ended up
+deciding the comparison.
 
 The schedule is data, so what it should produce was worked out before it was
 sent: `tools/traffic/simulate.mjs` runs the same three detectors and the same
@@ -635,6 +703,8 @@ scaffolded.** The same file still carried a light `--background` and a
 `prefers-color-scheme` block for a theme this dashboard never renders. Some of
 what looked like an aesthetic problem was a bug nobody had read the CSS closely
 enough to see.
+
+![The overview: stat tiles, the aggregate day, and the group list](docs/screenshots/overview.png)
 
 ### It ships no JavaScript of its own
 
@@ -944,9 +1014,14 @@ web/       Next.js 16 App Router, deployed to Vercel
     components/ui/     panel, stat tile, badge
   lib/        Neon handle, the read queries, the list's URL state
   test/       node --test over the pure logic, no runner installed
+tools/     traffic/  the generated scenario, its offline model and the comparison
+           media/    the two recordings at the top of this file
+docs/      media/, screenshots/, design/
 .githooks/ commit-msg policy, enabled with core.hooksPath
 .github/   CI: policy scan, backend and web tests, image build, web build
            sweep: the three-hourly trigger that wakes the collector
+           traffic: the scenario driver, dispatch-only now the run is over
+           bet: the weekly check that the read path still needs nothing
 ```
 
 Grouping and rollup both run inline on the ingest path rather than behind a
@@ -980,9 +1055,18 @@ Node's type stripping resolves neither a bare specifier nor the `@/` alias; and
 that in turn needs `allowImportingTsExtensions`, or `tsc` rejects what Node
 requires.
 
-What is covered is the pure logic — the list's URL state, the cursor, the
-formatting. What is not is anything that renders, which would need a DOM and
-therefore a dependency. That line is drawn on purpose rather than by neglect.
+`npm test` runs that suite and then a second one, `test:render`, which compiles
+the pages with the same TypeScript and renders them with the same `react-dom`
+the application already depends on. It is a separate script because it needs a
+compile the first suite exists to avoid: `.tsx` is the one thing Node's type
+stripping will not load, so the pages are emitted to `.render-out/` first and the
+tests run against that. Still no runner, still nothing installed —
+[the section on it](#the-dashboard-renders-in-a-test-now-and-it-cost-nothing-to-install)
+has the reasoning.
+
+Adding a render test means writing it in `test/render/`, giving the fixture the
+rows the page should receive, and asserting on what the page says. Assertions go
+against the text rather than the markup, so a restyle does not break them.
 
 `npm run build` deliberately succeeds without `DATABASE_URL`: the dashboard must
 never reach the database at build time, and CI enforces it.
@@ -1172,15 +1256,15 @@ missing is not the mechanism but traffic with a shape that trips it.
 | `POST /api/events` writes a row | 202, `stored: true` |
 | Request without the shared secret | 401 |
 | Dashboard renders groups | 9 groups, with sparklines and storage status |
-| **Dashboard while ingestion is asleep** | **200 in 0.40 s, full data** |
+| **Dashboard while ingestion is asleep** | **200 in 0.39–0.40 s, full data**, on two separate occasions |
 | Group list, with 24-hour sparklines per group | 0.40–0.58 s warm |
 | Group detail, trend + similarity + frame breakdown | 0.36–0.52 s across all three ranges |
 | Alerts and detector scorecard pages | 0.31–0.72 s |
 | *(the four rows above predate the redesign; re-measured below)* | |
 | First request after a fully idle period | 1.8–3.3 s (see below) |
 | Neon query time from `fra1` | 6–16 ms |
-| Ingestion cold start | **95, 104, 104, 104, 106, 114, 116 s**, measured seven times |
-| Ingestion when warm | 0.19–0.26 s |
+| Ingestion cold start | **95, 104, 104, 104, 104, 106, 114, 116 s**, measured eight times |
+| Ingestion when warm | 0.19–0.53 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
 
 ### The claim, and the control that backs it
@@ -1194,23 +1278,90 @@ that is supposed to be optional, so the claim is measured again rather than
 inherited.
 
 To confirm the service was genuinely asleep rather than merely idle, the next
-request after the measurement was timed. The two are seven seconds apart:
+request after the measurement was timed. Twice, months of work apart:
 
 ```
+07:41:27   dashboard   200 in 0.39 s — 15 groups, charts, alerts, scorecard
+07:41:29   ingestion   200 in 104.38 s          <- two seconds later
+
 22:41:10   dashboard   200 in 0.40 s — 9 groups, charts, alerts, scorecard
-22:41:17   ingestion   200 in 104.2 s
+22:41:17   ingestion   200 in 104.2 s           <- seven seconds later
 ```
+
+The first is the stronger of the two and is the one quoted at the top of this
+file. Two seconds between the requests leaves less room to argue the service
+happened to fall asleep in the gap, and it was taken after the traffic run that
+changed the active detector — so it speaks for the read path as it stands rather
+than as it stood two steps ago. The second is kept because a claim tested once is
+a claim tested once.
 
 So during the same window in which the ingestion service could not answer at all,
 the dashboard served everything — group list, sparklines, storage status, trend
 charts, frame breakdown, fingerprint input, similar groups, alerts and the
 detector scorecard — in under half a second.
 
-That is the architectural bet, tested rather than asserted. A static check backs
-the measurement: the CI `policy` job greps `web/` for `fetch(`, `axios`,
-`node-fetch`, `undici`, `XMLHttpRequest` and the ingestion host, and fails on a
-match. The measurement is still the real evidence; the grep is the part that does
-not depend on anyone remembering to take it.
+So during the same window in which the ingestion service could not answer at all,
+the dashboard served everything — group list, sparklines, storage status, trend
+charts, frame breakdown, fingerprint input, similar groups, alerts and the
+detector scorecard — in under half a second.
+
+### What guards the bet when nobody is measuring it
+
+Eight measurements, every one of them taken by hand. For a claim the rest of the
+project is built on, that is one distracted afternoon away from being untrue, so
+it is now guarded in three places — and the three are not equally good.
+
+**A grep, which is the weakest and runs first.** The `policy` job scans `web/`
+for ways out. It is cheap and it fails early, and it should not be mistaken for
+protection: a grep sees spelling. Two ways of breaking the claim were tried
+against the original pattern before it was widened — an alias, `const call =
+globalThis.fetch`, and a `node:https` import — and **both walked straight past
+it**. The pattern now covers those two and the next person will spell it a third
+way.
+
+**A dial-watch, which is the one that holds.**
+`web/test/render/isolation.test.ts` renders every page with
+`net.Socket.prototype.connect` wrapped, and asserts nothing was dialled. It sees
+the attempt rather than the spelling, so the alias and the `node:https` import
+are both caught. A second test loads the real query module, records the URLs it
+asks for, and asserts the only host is the database's — the one place the first
+test cannot see, since the render tests replace that module.
+
+The assertion is deliberately on **what was recorded, not on what threw.** Pages
+catch their own errors: `load()` logs a failure rather than letting it reach the
+reader, which is right. So a page doing `try { await fetch(collector) } catch {}`
+would render perfectly while quietly depending on a service that is supposed to
+be optional. Only the record gives that away.
+
+**A weekly request, which is the only one that tests the deployment.** Both
+checks above read the repository, and a repository stays green through a Vercel
+variable pointed at the wrong database or a Neon credential expiring. The `bet`
+workflow reads the dashboard, then asks the collector how long it takes to wake,
+and reports whether the claim held. It runs at 02:30 on a Monday for a reason:
+the sweep is the only thing that wakes the collector, on a fixed schedule, so it
+sleeps from about :24 past until :07 past the next third hour. Half past two is
+two hours into that window. It is not a coin toss dressed up as a test.
+
+It has three outcomes and says which. Cold collector and a fast, fully rendered
+dashboard is a pass. Cold collector and a slow or empty dashboard is a failure.
+A collector that was already awake is **inconclusive, and reported as
+inconclusive** — a run that could not test the claim must not be allowed to look
+like a run that tested it and found it holding.
+
+**What none of them catch,** stated because a guard nobody knows the edges of is
+worse than none:
+
+- A dashboard that is fast and renders the *wrong* data. Every check here asks
+  whether it answered, not whether it was right.
+- Anything that breaks between weekly runs. The window is seven days wide.
+- A query layer repointed at a different Postgres. The host check passes as long
+  as it is still a database.
+- A call whose URL is empty or unset. It opens no connection, so the dial-watch
+  sees nothing — though it is also not a dependency on anything until somebody
+  configures it.
+
+The measurements above remain the real evidence. These three are the part that
+does not depend on anyone remembering to take them.
 
 ### The interface, after the redesign
 
@@ -1278,7 +1429,7 @@ detectors and the same scoring statement over the schedule offline.
 |---|---|---|---|---|---|---|
 | `ewma` | 64% | 100% | 7 | 4 | 0 | 85 |
 | `zscore` | 33% | 29% | 2 | 4 | 5 | 85 |
-| `poisson` *(active)* | 41% | 100% | 7 | 10 | 0 | 79 |
+| `poisson` *(active at the time)* | 41% | 100% | 7 | 10 | 0 | 79 |
 
 96 judged buckets against the 3 the scorecard had before, and 18 hours where the
 three disagree.
@@ -1291,7 +1442,70 @@ erratic, and again on one whose trend the flat mean has not caught up with. If
 the live run agrees, the active detector changes. The measurement is the
 argument, or there was no reason to build the scorecard.
 
-*(Live result pending: the schedule runs to 2026-08-12T21:00Z.)*
+**Two corrections to that table, made before the result was known.** Checking the
+model against the collector's own scorecard mid-run found three places where the
+transcription was not faithful: it dropped evaluations with too little history
+behind them, which the collector records as "did not fire" rather than not at
+all; it started the history window at hour zero rather than at the group's first
+sighting; and it scored hours the collector had not reached yet. Corrected, the
+same schedule predicts `ewma` 60%/75%, `zscore` 33%/25% and `poisson` 38%/75%.
+The numbers moved and the ordering did not. The table above is left as it was
+published, because a prediction edited after the fact is a description.
+
+### The result, and the detector it changed
+
+Thirty hours, 2,163 events, 111 judged hours, nothing left awaiting hindsight.
+
+**These are the numbers as the run ended.** The
+[live scorecard](https://stacklight-eosin.vercel.app/detectors) has moved since and
+will keep moving: verifying the switch afterwards meant sending twenty more events,
+which `ewma` fired on and which the scorer has been judging ever since — it reads
+75% / 86% at the time of writing. The table below is the sample the decision was made
+from, not a claim about what the page says today.
+
+| Detector | Precision | Recall | TP | FP | FN | TN |
+|---|---|---|---|---|---|---|
+| `zscore` | **100%** | 45% | 5 | 0 | 6 | 100 |
+| **`ewma`** *(now active)* | **69%** | **82%** | 9 | 4 | 2 | 96 |
+| `poisson` *(was active)* | 41% | 82% | 9 | **13** | 2 | 87 |
+
+**`ewma` and `poisson` are not a trade-off.** They caught the same nine surges
+and missed the same two — identical recall, hour for hour — and `poisson` raised
+three times the false alarms getting there. There is no axis on which the
+incumbent is better, so `stacklight.detection.active` now reads `ewma`.
+
+**Where the thirteen came from.** Eleven are one service: a worker whose error
+rate climbs steadily for twenty hours and then levels off. Nothing in that is a
+departure from its own local rate, so the scorer calls none of it a surge — but
+the flat mean Poisson fits lags a rising trend, and the gap between the two reads
+as a fresh surprise every hour for as long as the climb lasts. `ewma` weighs
+recent hours more heavily, so the same climb carries its baseline with it and it
+stays quiet. That is the failure this file predicted for a rate-based detector,
+found on the shape that provokes it.
+
+**`zscore` never cried wolf and that is not enough.** Zero false positives across
+111 hours, and six of the eleven real surges missed. Every miss is the same
+group: a service idle for three hours then failing forty times, over and over.
+The spread that behaviour creates is the spread the z-score divides by, so the
+group desensitises the detector watching it and a genuine spike lands inside its
+own noise. For an alerting path, four false alarms cost less than four incidents
+nobody was told about.
+
+**What the run did not settle.** Eight of the thirty hours did not arrive as
+written — six dropped by the scheduler before the reconciliation existed, two
+sent twice — so this is the delivered schedule rather than the designed one, and
+`tools/traffic/compare.mjs` prints all three columns side by side for exactly
+that reason. Re-running the model over what actually arrived predicts 64%/78%,
+80%/44% and 35%/78%: the same ordering, the same decision, and close enough to
+the measured 69%/82%, 100%/45% and 41%/82% that the remaining gap is the scoring
+model's own imprecision rather than anything about the detectors. It is not an
+exact match and is not claimed as one.
+
+The sample is also small — eleven genuine surges is enough to separate three
+detectors on this data and not enough to be a general result about any of them.
+The claim here is narrow and stated as such: on thirty hours of a generated
+scenario, one detector was strictly better than the one in charge, so the one in
+charge changed.
 
 ### What is built and not yet switched on
 
@@ -1302,21 +1516,72 @@ table above. One thing is left.
 **Grouping v2** is complete, tested and deliberately inactive.
 `stacklight.grouping.active-version` stays at 1.
 
-The replay report has now been run against production, which was the condition
-this file set for moving it. The answer it gave was not the expected one:
+The replay report was the condition this file set for moving it. It has been run
+twice, and the second run is the one that decides:
 
 ```
-{"version":2,"groupsTotal":9,"groupsCovered":7,"eventsReplayed":31,
- "merges":[],"splits":[]}
+first run    {"version":2,"groupsTotal":9, "groupsCovered":7, "eventsReplayed":31,
+              "merges":[],"splits":[]}
+
+after the    {"version":2,"groupsTotal":15,"groupsCovered":13,"eventsReplayed":2170,
+traffic run   "merges":[],"splits":[]}
 ```
 
-Nothing merges and nothing splits. That is not evidence for v2, it is the absence
-of evidence either way: 31 events across 7 covered groups contain no case that
-tells the two versions apart. V2 changes how many in-app frames decide identity
-and how a frame with a scope rather than a location is keyed, and this deployment
-has no fault that exercises either. So the gate holds for the reason it was built
-— the report is meant to say what would change, and "nothing observable" is not
-a mandate to change the key every group is filed under.
+The first run could not answer the question — 31 events contained no case that
+told the two versions apart, which is absence of evidence rather than evidence.
+The second replays **seventy times** as many events and covers every group that
+has a stack trace to replay; the two it misses are the two `no_frames` groups,
+which have nothing to replay by definition. Still nothing merges and nothing
+splits, and this time that means something.
+
+**Both of v2's changes were checked against what is actually stored, and neither
+does what it was written to do here.**
+
+*The frame-signature change cannot fire at all.* V2 keeps a frame's file beside
+its declaring class when the two differ, so that `Object.<anonymous>` in two
+unrelated JavaScript files stops collapsing into one signature. Every JavaScript
+frame in this database has no declaring class, so v2 falls back to `file#function`
+— which is exactly what v1 already produces. On the Java side the file always
+repeats the class, so v2 returns `class#function`, identical again. The change
+targets a shape this parser does not produce.
+
+*The frame-count change does not fix the one real over-split.* Groups 39 and 40
+are the same fault reached through two entry points, which is the case v2 exists
+for:
+
+```
+g39   frame 1   CheckoutController$CartService#total     same
+g39   frame 2   CheckoutController#boom                  differs
+g40   frame 1   CheckoutController$CartService#total     same
+g40   frame 2   CheckoutController#handled               differs
+```
+
+Same service, same exception, same frames 3 and 4. V1 splits them across eight
+frames and **v2 splits them too**, because the divergence is at frame two and v2
+hashes the first three.
+
+**The test for that merge was written to the algorithm rather than to the data.**
+`oneFaultReachedThroughTwoPathsBecomesOneGroup` builds two paths that diverge at
+frame four, and v2 merges them correctly. That shape did not occur once in 2,170
+events. The shape that did occur diverges one frame earlier, and a replay gate
+existing to find out is the only reason anybody knows.
+
+So v2 stays off, on evidence this time rather than for want of it. Switching it
+on would re-partition every group in public — new groups opening while old ones
+stop growing, on a dashboard somebody is reading — and buy zero merges, zero
+splits, and an over-split that survives the change.
+
+The obvious repair is a trap worth naming. Hashing a single frame would merge 39
+and 40, and v2's own reasoning rejects it: the top frame is often a shared helper
+that throws for unrelated reasons. Both facts are now tests, and dropping the
+limit to one fails both of them at once. What the data asks for is a different
+rule — ignoring handler and entry-point frames, say — rather than a smaller
+number, and that is a design question rather than a setting.
+
+**The code stays.** It is the working half of the versioning architecture, it is
+what the replay evaluates, and the finding above was only possible because two
+versions can run over the same events side by side. Deleting the subject of the
+experiment to tidy up would be the wrong lesson to take from it.
 
 That is not a loose end left by accident. The version moves on evidence by
 design, and the collector's address is deliberately absent from this repository —
@@ -1327,13 +1592,69 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **166** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Backend | **167** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
-| Dashboard | **16** | `node --test` on TypeScript, no runner installed |
+| Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
+| Dashboard, rendered | **23** | `node --test` on pages compiled by the TypeScript already here |
+| Traffic scenario | **18** | `node --test`, over the schedule as pure data |
+| **Total** | **295** | the number on the badge at the top |
 
-The dashboard's count is the honest weak spot: it covers pure logic and nothing
-that renders, because rendering tests need a DOM and therefore a dependency.
+The badge is a written number rather than a live counter, and the CI `policy`
+job checks it against this table so the two cannot drift apart. Counting them
+automatically is harder than it looks: one backend test is parameterised and
+expands to nine cases at run time, so a grep for `@Test` reports 157 where the
+runner reports 166. The runners are the authority and this table is what they
+said.
+
+### The dashboard renders in a test now, and it cost nothing to install
+
+This section used to say the dashboard's count was the honest weak spot, because
+it covered pure logic and nothing that rendered. That was true and it mattered: a
+group page could have lost its stack trace panel, or the scorecard could have
+labelled the wrong detector active, and every test would still have passed.
+
+The reason it stayed that way was a real constraint rather than laziness.
+Rendering needs a DOM, a DOM needs a package, and `web/package.json` holding four
+runtime dependencies and no test runner is a property this file claims out loud.
+
+It turned out not to be a trade. Four things were checked before choosing:
+
+| | |
+|---|---|
+| Can `node --test` load a `.tsx`? | **No.** Type stripping does not transform JSX, so every approach needs a transform |
+| Is a transform already here? | **Yes.** `typescript` is a devDependency for `next build`, and `tsc` emits JSX under the existing `jsx: react-jsx` |
+| Is a renderer already here? | **Yes.** `react-dom/server` exposes `renderToStaticMarkup`, and `react-dom` is a runtime dependency |
+| Does `next/link` render outside Next? | **Yes.** It emits a plain `<a>` |
+
+So the pages are compiled by the TypeScript that was already installed, rendered
+by the `react-dom` that was already installed, and asserted with `node:test`,
+which is built in. **Nothing was added to either dependency list.**
+
+Three pieces of glue, all of them project code:
+
+- **`tsconfig.render-test.json`** emits to `.render-out/`. The root layout is
+  excluded: it loads a font through `next/font/google`, which only resolves
+  inside the Next build, and no page needs it — every page renders its own shell.
+- **`test/render/resolve.cjs`** teaches Node the `@/` alias, which `tsc` leaves
+  in the output because it is a bundler convention. It also points
+  `@/lib/queries` at the fixtures. That is the only seam a render test needs:
+  every page reaches the database through that module and through nothing else,
+  and `lib/db.ts` builds its handle lazily, so importing it opens no connection.
+- **`test/render/render.ts`** awaits the components before rendering. A page
+  awaits its query and then returns a shell that awaits its own, which React
+  refuses to render synchronously; resolving that is a server-components
+  runtime's job, and pulling one in would have been the dependency this avoided.
+
+The fixtures are annotated with the real exported query types, so `tsc` fails if
+a query's shape changes and the fixture does not. Fixtures that can drift are
+worse than none, because they keep passing.
+
+**What is still not covered.** No browser runs, so nothing here sees CSS, layout,
+or anything that only breaks at a real viewport width — those are still checked
+by hand and by looking. The tests assert on what the page says rather than on how
+it is arranged, which is the point: a restyle should not break them, and a
+deleted stack trace panel should.
 
 ### The read path has its own cold start, and it is not free
 
@@ -1351,9 +1672,9 @@ visitor who arrives first does feel it.
 ### Two findings worth carrying forward
 
 **Cold starts are worse than the platform documents.** Render describes roughly
-a minute; the three measurements here were 95, 104 and 114 seconds. The first of
-them returned **503** rather than waiting — the platform gave up before the
-service finished starting.
+a minute; the first three measurements were 95, 104 and 114 seconds, and none of
+the eight now on record has come in under 95. The first returned **503** rather
+than waiting — the platform gave up before the service finished starting.
 
 This decides the shape of the client library in a later step. A caller must
 never block on this endpoint, and a single failed attempt cannot be treated as a
