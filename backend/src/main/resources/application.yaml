@@ -77,7 +77,13 @@ stacklight:
   detection:
     # Every detector runs on every bucket; only this one may raise an alert. The others
     # are shadows, and the scorecard is what decides whether this stays the choice.
-    active: ${DETECTOR_ACTIVE:poisson}
+    # Chosen by the scorecard rather than by the argument for it. Over 111 judged hours
+    # ewma and poisson caught the same nine surges and missed the same two, and poisson
+    # raised thirteen false positives to ewma's four -- eleven of them on one service
+    # degrading gradually, where the flat mean poisson fits lags the trend and reads the
+    # gap as a surprise every hour. Changing this is a configuration change whose effect
+    # was measured before it was made, which is what shadow mode is for.
+    active: ${DETECTOR_ACTIVE:ewma}
     history-hours: 24
     min-history-hours: 6
     # The number that makes this domain different. 97% of group-hour buckets are empty,

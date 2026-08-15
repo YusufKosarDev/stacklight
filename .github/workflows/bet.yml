@@ -1,0 +1,140 @@
+name: bet
+
+# Checks the claim the whole architecture rests on, against the deployment rather than
+# against the code: the dashboard renders in full while the ingestion service is asleep.
+#
+# ## Why this exists when CI already guards the read path
+#
+# CI has two guards and both read the repository. The `policy` job greps `web/` for ways
+# out, and the render tests dial-watch every page. Between them they catch a commit that
+# breaks the claim.
+#
+# Neither can catch a deployment that breaks it. A Vercel environment variable pointed at
+# the wrong database, a Neon credential expiring, a dashboard that answers but renders
+# empty -- the repository stays green through all of it. That class of failure needs a
+# request, and a request is the one thing a code check cannot make.
+#
+# ## Why it is not flaky
+#
+# The check only means something while the collector is genuinely asleep, and what wakes
+# it is known: the sweep, on a fixed schedule of seven minutes past every third hour.
+# Each wake holds the instance up for the fifteen minutes Render waits before idling it
+# out, so it sleeps from about :24 until the next :07 -- a window of two hours and
+# forty-three minutes.
+#
+# Half past two on a Monday lands two hours into that window. This is not a coin toss
+# dressed up as a test.
+#
+# ## Why it is weekly
+#
+# Each run wakes the collector and so spends about seventeen minutes of instance time.
+# Weekly is roughly 1.2 hours a month against a budget of about 69, which is the price of
+# knowing; hourly would be five times the sweep's own cost to learn the same thing.
+
+on:
+  schedule:
+    - cron: "30 2 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: bet
+  cancel-in-progress: false
+
+jobs:
+  bet:
+    name: bet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The dashboard first, and before anything touches the collector. Reversing these
+      # two would wake the service and then ask whether it was asleep.
+      - name: Read the dashboard
+        id: dashboard
+        env:
+          DASHBOARD_URL: https://stacklight-eosin.vercel.app
+        run: |
+          # Three times. The first can be slow for a reason that is not the claim: Neon
+          # suspends its compute when nobody is reading, and waking it costs a second or
+          # two on top of a cold Vercel function. The claim is about the steady state, so
+          # the later two are the ones that count.
+          for i in 1 2 3; do
+            body=$(mktemp)
+            t=$(curl -sS -o "$body" -w '%{time_total} %{http_code}' --max-time 30 "$DASHBOARD_URL") || t="30 000"
+            secs=${t% *}; code=${t#* }
+            bytes=$(wc -c < "$body")
+            echo "attempt $i: HTTP $code in ${secs}s, $bytes bytes"
+            eval "t$i=$secs"; eval "code$i=$code"; eval "bytes$i=$bytes"
+            rm -f "$body"
+          done
+
+          if [ "$code3" != "200" ]; then
+            echo "::error::the dashboard answered $code3"
+            exit 1
+          fi
+
+          # Rendered rather than merely answering. An empty 200 is the failure this is
+          # most likely to meet: the page shell serves, the query behind it does not.
+          if [ "$bytes3" -lt 20000 ]; then
+            echo "::error::the dashboard returned $bytes3 bytes; it answered without rendering"
+            exit 1
+          fi
+
+          echo "warm=$t3" >> "$GITHUB_OUTPUT"
+          echo "dashboard served $bytes3 bytes in ${t3}s"
+
+      # Now, and only now, ask the collector -- which wakes it, and times how long that
+      # took. A hundred seconds is a service that was not there; a fifth of a second is a
+      # service that was.
+      - name: Ask the collector how asleep it was
+        id: collector
+        env:
+          COLLECTOR_URL: ${{ secrets.COLLECTOR_URL }}
+        run: |
+          if [ -z "$COLLECTOR_URL" ]; then
+            echo "::notice::COLLECTOR_URL is not set; nothing to compare against"
+            echo "verdict=inconclusive" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          cold=$(curl -sS -o /dev/null -w '%{time_total}' --max-time 300 \
+                      "$COLLECTOR_URL/actuator/health") || cold=300
+          echo "collector answered in ${cold}s"
+          echo "cold=$cold" >> "$GITHUB_OUTPUT"
+
+          # Three outcomes, and the third is stated rather than hidden. A run that could
+          # not test the claim must not be allowed to look like a run that tested it and
+          # found it holding.
+          if awk "BEGIN{exit !($cold > 60)}"; then
+            echo "verdict=cold" >> "$GITHUB_OUTPUT"
+          elif awk "BEGIN{exit !($cold < 10)}"; then
+            echo "verdict=inconclusive" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=unclear" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say what that means
+        env:
+          VERDICT: ${{ steps.collector.outputs.verdict }}
+          COLD: ${{ steps.collector.outputs.cold }}
+          WARM: ${{ steps.dashboard.outputs.warm }}
+        run: |
+          case "$VERDICT" in
+            cold)
+              echo "::notice::the bet holds: dashboard ${WARM}s while the collector took ${COLD}s to wake"
+              printf '%s\n' \
+                "| | |" "|---|---|" \
+                "| dashboard | ${WARM}s, fully rendered |" \
+                "| collector | ${COLD}s, cold start |" \
+                "| verdict | **the read path does not need it** |" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            inconclusive)
+              # The collector was already awake, so the dashboard being fast proves
+              # nothing about whether it needs it. Not a failure and not a pass.
+              echo "::notice::inconclusive: the collector was already awake (${COLD}s), so the claim was not tested"
+              echo "Inconclusive — the collector was awake (${COLD}s). Nothing was proved either way." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::warning::unclear: the collector took ${COLD}s, neither plainly cold nor plainly warm"
+              echo "Unclear — the collector took ${COLD}s. Treat this run as no evidence." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac

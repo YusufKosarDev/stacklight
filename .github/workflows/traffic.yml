@@ -1,37 +1,37 @@
 name: traffic
 
-# Sends one hour of a generated scenario to the collector, once an hour.
+# Sends one hour of a generated scenario to the collector.
 #
 # This is not real traffic and the README says so in the same words. It exists because
 # the detector scorecard cannot compare three detectors on a deployment nobody uses: with
 # three judged buckets they all sat at 100% and the choice of active detector rested on an
-# argument rather than a measurement.
+# argument rather than a measurement. It has since done its job -- the run finished, the
+# scorecard filled, and the active detector changed on the strength of it.
 #
 # Rollup buckets are written as date_trunc('hour', now()), so history cannot be
 # back-filled and the scenario has to be played against the wall clock. tools/traffic
 # holds the schedule; this file only decides when to call it.
 #
-# It stops itself. The schedule is thirty hours long and the generator exits without
-# sending anything once that has passed, so the cron can be left in place without waking
-# the instance every hour for ever. Deleting the workflow is the tidy-up, not the brake.
+# ## Why there is no cron here any more
 #
-# The cost is the reason the run is bounded: each wake keeps the instance up for the
-# fifteen minutes Render waits before idling it out, and the 750 instance-hours a month
-# belong to the whole workspace. Thirty hourly wakes is about nine of them, once.
+# There was one, at five, twenty-five and forty-five past. Once an hour had not survived
+# contact with the scheduler -- of the first eighteen hours it fired for eleven, and the
+# hours it dropped were the ones carrying the cases the detectors disagree about -- and
+# running three times an hour was only safe because the generator sends the difference
+# rather than the plan: it reads what the hour already holds and sends what is missing, so
+# a tick that finds the hour complete makes no request to the collector at all.
+#
+# The schedule was thirty hours long and the generator stops itself once that has passed,
+# so leaving the cron would have been harmless rather than costly: an idle tick returns
+# before it reaches either the database or the collector. It would just have been seventy
+# green runs a day saying nothing, which is a worse thing to leave in a repository than a
+# workflow somebody has to press.
+#
+# Dispatch is kept rather than deleting the file. The schedule in tools/traffic is data
+# and the run is reproducible from it; re-running means moving START_ISO and pressing this,
+# which is a smaller thing to explain than a workflow that has to be reconstructed.
 
 on:
-  schedule:
-    # Three times an hour, because once an hour did not survive contact with the
-    # scheduler: of the first eighteen hours it fired for eleven, and the hours it
-    # dropped were the ones carrying the cases the detectors disagree about.
-    #
-    # Running more often is only safe because the generator sends the difference rather
-    # than the plan. It reads what the hour already holds and sends what is missing, so a
-    # tick that finds the hour complete makes no request to the collector at all -- which
-    # is both the guard against double-sending and the reason three ticks an hour cost
-    # about what one did. Sending the plan on every tick is how one hour ended up with
-    # twice its traffic, and a doubled count turns a routine peak into a real surge.
-    - cron: "5,25,45 * * * *"
   workflow_dispatch:
 
 # One at a time, and the newest wins.
