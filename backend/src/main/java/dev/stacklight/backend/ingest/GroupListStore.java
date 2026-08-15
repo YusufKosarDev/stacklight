@@ -17,11 +17,18 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class GroupListStore {
 
+    /**
+     * The cast on {@code :status} is load-bearing rather than decorative. Passed as a bare
+     * parameter it arrives untyped when it is null, and Postgres refuses to guess: {@code
+     * could not determine data type of parameter $1}. Spelled as {@code cast(... as text)}
+     * rather than {@code ::text} because the named-parameter parser and the cast operator
+     * would otherwise be reading the same two colons.
+     */
     private static final String LIST =
             """
             select id, service, title, status, event_count, last_seen
               from event_groups
-             where (:status is null or status = :status)
+             where (cast(:status as text) is null or status = cast(:status as text))
              order by last_seen desc, id desc
              limit :limit
             """;

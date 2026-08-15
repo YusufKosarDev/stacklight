@@ -205,15 +205,29 @@ class GroupConsoleTests {
                         new ClassPathResource("static/console.js").getContentAsByteArray(),
                         StandardCharsets.UTF_8);
 
-        // Group titles come from error messages somebody else's application sent, so a
-        // single innerHTML here would turn a reported error into script running in the
-        // operator's browser -- in the tab holding the console key. The rule is that every
-        // value goes in through textContent, and this is what stops it lapsing quietly.
-        assertThat(script)
+        // Comments are removed first, so the rule applies to what runs rather than to what
+        // the file says about itself. Without this the script cannot explain the rule
+        // without breaking it -- the first version of this test failed on its own subject's
+        // header comment. The stripper is deliberately simple because the file it reads is
+        // one this repository writes.
+        String code = withoutComments(script);
+
+        // Group titles come from error messages somebody else's application sent, so one of
+        // these here would turn a reported error into script running in the operator's
+        // browser -- in the tab holding the console key. The rule is that every value goes
+        // in through textContent, and this is what stops it lapsing quietly.
+        assertThat(code)
                 .doesNotContain("innerHTML")
                 .doesNotContain("outerHTML")
                 .doesNotContain("insertAdjacentHTML")
                 .doesNotContain("document.write");
+
+        // A stripper that ate the whole file would make the assertions above vacuous.
+        assertThat(code).contains("textContent");
+    }
+
+    private static String withoutComments(String source) {
+        return source.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)^\\s*//.*$", "");
     }
 
     // ---- plumbing ----------------------------------------------------------------
