@@ -54,6 +54,14 @@ stacklight:
     # been read and the merges and splits it reports were the ones expected.
     active-version: ${GROUPING_ACTIVE_VERSION:1}
 
+  console:
+    # Guards /api/groups -- the triage console's list and its status writes. Separate from
+    # the ingest key on purpose: that one is deployed to every installation reporting
+    # errors, and one of them leaking should not also hand over the ability to mark faults
+    # resolved. Blank means the console cannot read or write, which is the right default
+    # for a deployment that never wanted one.
+    api-key: ${CONSOLE_API_KEY:}
+
   ingest:
     api-key: ${INGEST_API_KEY:}
     # Beyond this many events per hour, a group keeps being counted but stops storing

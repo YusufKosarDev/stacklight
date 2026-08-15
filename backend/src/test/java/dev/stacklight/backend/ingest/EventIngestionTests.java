@@ -137,7 +137,7 @@ class EventIngestionTests {
                         .POST(HttpRequest.BodyPublishers.ofString(json));
 
         if (apiKey != null) {
-            request.header(IngestAuthFilter.HEADER, apiKey);
+            request.header(ApiKeyFilter.INGEST_HEADER, apiKey);
         }
 
         return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
