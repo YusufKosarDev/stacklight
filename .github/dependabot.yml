@@ -14,15 +14,28 @@ version: 2
 
 updates:
   # ---- Maven ---------------------------------------------------------------------
-  # Five manifests, and each one declares dependencies of its own rather than inheriting
-  # them all: the collector, the SDK parent, both SDK artifacts, and the example that CI
-  # builds against the starter to stop it rotting.
+  # Three entries, not five. The collector, the SDK, and the example that CI builds
+  # against the starter to stop it rotting.
+  #
+  # Both SDK artifacts were listed here as well, on the reasoning that each declares
+  # dependencies of its own rather than inheriting them all -- which is true of
+  # stacklight-spring, whose pom pins spring-webmvc and spring-test itself. It is not
+  # a reason to list them, because /sdk/java is a Maven reactor and the scan follows
+  # it into the modules. Listing them again buys nothing and costs a pull request per
+  # manifest per bump.
+  #
+  # The first round after this file was written showed the size of it. Nine Maven
+  # pull requests arrived and they were five changes: /sdk/java alone had already
+  # produced the junit-bom bump in the parent *and* the spring-webmvc and spring-test
+  # bumps inside stacklight-spring, and every pull request the two module entries
+  # opened edited a file one of those had edited first.
+  #
+  # Nothing goes unwatched by dropping them. stacklight-client declares no version of
+  # its own at all -- both of its test dependencies are managed by the parent.
   - package-ecosystem: maven
     directories:
       - "/backend"
       - "/sdk/java"
-      - "/sdk/java/stacklight-client"
-      - "/sdk/java/stacklight-spring"
       - "/examples/java-demo"
     schedule:
       interval: weekly
