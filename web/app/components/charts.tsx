@@ -19,11 +19,14 @@ const MUTED_INK = "#9a9aa6";
 const GRIDLINE = "#1f1f28";
 
 /**
- * Twenty-four hourly counts, drawn small enough to live in a table row.
+ * Seven daily counts, drawn small enough to live in a table row.
  *
  * No axes, no labels: at this size they would out-weigh the data. The row already
  * carries the total and the last-seen time, so the sparkline only has to answer
  * "steady, spiking, or over?".
+ *
+ * The same window as the trend above the table, on purpose. A row drawn over a
+ * different span from the chart it sits under is a page arguing with itself.
  */
 export function Sparkline({
   series,
@@ -32,7 +35,7 @@ export function Sparkline({
   series: number[] | undefined;
   label: string;
 }) {
-  const data = series ?? new Array(24).fill(0);
+  const data = series ?? new Array(7).fill(0);
   const peak = Math.max(...data, 1);
   const total = data.reduce((sum, n) => sum + n, 0);
 
@@ -40,7 +43,7 @@ export function Sparkline({
     <div
       className="flex h-8 items-end gap-[2px]"
       role="img"
-      aria-label={`${label}: ${total} events over the last 24 hours`}
+      aria-label={`${label}: ${total} events over the last 7 days`}
     >
       {data.map((count, index) => {
         const height = count === 0 ? 2 : Math.max(3, (count / peak) * 32);
@@ -200,30 +203,34 @@ export function TrendChart({
 }
 
 /**
- * Every group's events, by hour, for the last day.
+ * Every group's events, by day, for the last week.
  *
- * Takes an already-summed array rather than querying. The per-group rollups are
- * fetched for the sparklines anyway, so the aggregate is a sum over data the
- * page is already holding rather than a second trip to the database on the
+ * Takes an already-summed array rather than querying, so the aggregate is one
+ * value the page is handed rather than a second trip to the database on the
  * critical read path.
  *
- * @param hourly 24 counts, oldest first
+ * A week rather than a day because the rollups outlive the events behind them,
+ * and a front page that could only reach back 24 hours went blank on a
+ * deployment whose traffic arrives in bursts -- showing nothing while the
+ * history it was drawn from was intact.
+ *
+ * @param daily 7 counts, oldest first
  */
 export function OverviewTrend({
-  hourly,
+  daily,
   total,
 }: {
-  hourly: number[];
+  daily: number[];
   total: number;
 }) {
-  const peak = Math.max(...hourly, 1);
-  const peakIndex = hourly.findIndex((count) => count === peak && peak > 0);
+  const peak = Math.max(...daily, 1);
+  const peakIndex = daily.findIndex((count) => count === peak && peak > 0);
 
   return (
     <figure className="m-0">
       <figcaption className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
         <span className="text-sm font-medium text-ink">
-          All events, last 24 hours
+          All events, last 7 days
         </span>
         <span className="font-mono text-xs tabular-nums text-ink-low">
           {total} total &middot; peak {peak}
@@ -234,9 +241,9 @@ export function OverviewTrend({
         className="flex h-24 items-end gap-[3px] border-b"
         style={{ borderColor: GRIDLINE }}
         role="img"
-        aria-label={`${total} events over the last 24 hours, peaking at ${peak} in one hour`}
+        aria-label={`${total} events over the last 7 days, peaking at ${peak} in one day`}
       >
-        {hourly.map((count, index) => (
+        {daily.map((count, index) => (
           <span
             key={index}
             className="flex-1 rounded-t-[3px]"
@@ -251,9 +258,9 @@ export function OverviewTrend({
       </div>
 
       <div className="mt-2 flex justify-between font-mono text-[10px] tabular-nums text-ink-faint">
-        <span>24h ago</span>
-        <span>12h</span>
-        <span>now</span>
+        <span>7d ago</span>
+        <span>3d</span>
+        <span>today</span>
       </div>
     </figure>
   );

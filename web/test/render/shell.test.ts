@@ -16,7 +16,7 @@ import { text } from "./render";
 
 const routes = async () => {
   reset();
-  scenario.navCounts = { open_groups: 14, recent_alerts: 37 };
+  scenario.navCounts = { open_groups: 14, alerts: 37 };
   return {
     groups: await text(await Groups({ searchParams: Promise.resolve({}) })),
     alerts: await text(await Alerts()),
@@ -56,7 +56,7 @@ test("the nav still renders when its own count query has failed", async () => {
   // loadNavCounts catches and returns null on purpose: the sidebar has to render on a
   // page whose query already failed, and during a build with no DATABASE_URL at all.
   reset();
-  scenario.navCounts = null as unknown as { open_groups: number; recent_alerts: number };
+  scenario.navCounts = null as unknown as { open_groups: number; alerts: number };
 
   const page = await text(await Detectors());
 

@@ -37,7 +37,7 @@ type LoadResult =
       sparklines: Map<number, number[]>;
       services: string[];
       counts: Record<string, number>;
-      trend: { hourly: number[]; total: number };
+      trend: { daily: number[]; total: number };
       storage: StorageStatus;
       ms: number;
     }
@@ -205,7 +205,7 @@ export default async function Page({
           <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile label="Open faults" value={result.counts.open ?? 0} />
             <StatTile
-              label="Events · 24h"
+              label="Events · 7d"
               value={result.trend.total}
               caption={filtered ? "matching this filter" : undefined}
             />
@@ -227,7 +227,7 @@ export default async function Page({
 
           <Panel className="mb-7">
             <OverviewTrend
-              hourly={result.trend.hourly}
+              daily={result.trend.daily}
               total={result.trend.total}
             />
           </Panel>

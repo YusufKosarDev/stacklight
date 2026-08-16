@@ -67,7 +67,7 @@ test("rendering every page opens no connection to anything", async () => {
   scenario.detail = aDetail();
   scenario.alerts = [anAlert()];
   scenario.detectors = [aDetector()];
-  scenario.navCounts = { open_groups: 1, recent_alerts: 1 };
+  scenario.navCounts = { open_groups: 1, alerts: 1 };
 
   const socket = watchTheSocket();
   try {
