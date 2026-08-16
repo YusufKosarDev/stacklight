@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-307-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-320-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -60,6 +60,7 @@ silently would have made the clip an illustration rather than evidence.
 - [The interface](#the-interface) — a dashboard that ships no JavaScript of its own
 - [The clients](#the-clients) — Java and Node, built around a collector that takes a hundred seconds to wake
 - [Connection strategy](#connection-strategy) — why the two halves talk to the same database differently
+- [Observability, and the collector it does not have](#observability-and-the-collector-it-does-not-have) — built, guarded, and honest about what nothing reads
 - [API](#api) — four endpoints
 - [Layout](#layout) — where things live
 - [Local development](#local-development) — running it, and the two constraints the dashboard tests carry
@@ -1066,6 +1067,109 @@ exactly the reason above.
 
 ---
 
+## Observability, and the collector it does not have
+
+The write path now carries a correlation id, publishes metrics, and can emit JSON
+logs. **Nothing collects any of it**, and that is not an oversight waiting to be
+fixed — it is what the hosting allows. This section says what was built, what it
+costs, and which half of it is currently useful, because a metrics endpoint
+nobody scrapes is the kind of thing that reads as monitoring and is not.
+
+### What the platform permits, measured before anything was written
+
+| | |
+|---|---|
+| Render log streams, to ship logs anywhere | **Paid plans only.** Logs cannot leave the free tier. |
+| Render's own log viewer | 7 days on this plan. Filters by level and instance, greps with RE2 — but **does not parse arbitrary structured fields**. |
+| A free collector to ship to | Exists. Grafana Cloud's free tier takes 50 GB of logs and 10k series with no card. |
+
+So a collector is available and the road to it is not. The one thing that could
+bridge the gap — letting something scrape `/actuator/prometheus` — is the one
+thing this architecture cannot afford:
+
+| | Instance-hours a month |
+|---|---|
+| The sweep, three-hourly | ~90 |
+| A scrape every 60 seconds | **~720** |
+| The workspace allowance, shared by five services | **750** |
+
+A scraper never lets the instance idle out, so it alone would claim the whole
+pool and suspend every free service in the account. That is not a tuning
+question. It is the same arithmetic that set the sweep's cadence, arriving at a
+harder answer.
+
+### So the JSON is off, and turning it on is one variable
+
+Structured logging is Spring Boot's own — no dependency — and it is **not
+enabled**. On a viewer that cannot filter by JSON field, switching it on trades a
+readable log for a wall of JSON and buys no new way to search. The existing lines
+are already `key=value` and already greppable:
+
+```
+alert raised id=42 group=82 kind=spike delivery=queued
+```
+
+When there is something at the other end, `LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs`
+turns it on. The property is absent rather than blank, because it has no value
+that means off.
+
+### The correlation id, which is the half that pays for itself today
+
+One id per request, in the MDC, on every line the request produces and on the
+response so a caller can quote it back. It is useful now rather than later: the
+ingest path does grouping, both upserts, detection and the alert row inside a
+single request, and a woken instance draining a client's queue runs several of
+those at once. Adjacency in the log stops being enough exactly then.
+
+An inbound `X-Request-Id` is honoured so a client can stitch its trace to this
+one — but only when it is short and made of characters that cannot break a line.
+**A value carrying a newline would let a caller forge a log entry** that looks
+like this process wrote it. Anything else is replaced rather than rejected,
+because a malformed id is not a reason to refuse an error report.
+
+### What is measured, and what is deliberately not tagged
+
+Ingest latency by outcome, grouping time, what each sweep found, and how alert
+delivery ended. Four things, and the reason there are only four is the next
+paragraph.
+
+**No meter is tagged with a group id, a service name from a request, or an
+exception type.** Those are chosen by whoever holds an ingest key, so tagging by
+them would let a caller mint series until the registry filled the heap — the
+cardinality problem arriving through the front door rather than from a scanner.
+Outcomes are tagged; identities are not, and a test asserts a service name sent
+in a request body never appears in the metrics. A ceiling of 500 series is the
+second line, for the paths nobody thought of.
+
+`/actuator/prometheus` sits behind the **console key**, not the ingest one, for
+the same reason the console does: it names every endpoint, every status code and
+the shape of the traffic. `/actuator/health` stays open — it is the uptime target
+and the deploy gate, and it must answer without a secret.
+
+### Nothing sensitive reaches a log line
+
+No log statement carries an error message, a stack trace, a recipient address or
+a key. The two lines that mention keys say only that one is *not set*. That was
+true before this step and the step was written to keep it true.
+
+### What this is honestly worth right now
+
+The correlation id earns its place immediately. The metrics are read by hand, by
+one person, with `curl` — a snapshot of a process that is awake 12% of the time
+in sixteen-minute stretches, which is a long way from a graph. Pushing them
+instead of being scraped would fix the quota problem and not the other one:
+series that are empty seven hours in eight say very little.
+
+The thing worth noticing is that this project's real observability was never
+going to be here. It is in Postgres: `retention_runs` records every sweep with
+the reason it ran, `detector_observations` records all three verdicts on every
+bucket including the ones that declined to fire, alerts carry their delivery
+state and attempt count, and the scoring pass turns all of it into precision and
+recall on a page anyone can read. That survives the instance dying. A log line
+does not.
+
+---
+
 ## API
 
 `POST /api/events` — requires header `X-Stacklight-Key`.
@@ -1122,6 +1226,10 @@ leaking should not also be a way to change what has been triaged.
 `GET /console.html` — the console itself. No key: it carries no data, and the
 script fetches everything it shows from the endpoint above.
 
+`GET /actuator/prometheus` — Micrometer metrics. Requires `X-Stacklight-Console-Key`,
+for the reason in [the section above](#observability-and-the-collector-it-does-not-have):
+it describes every endpoint and the shape of the traffic.
+
 `GET /actuator/health` — no authentication, no database access.
 
 ---
@@ -1135,6 +1243,7 @@ backend/   Spring Boot 4.1 (Java 21), deployed to Render from Dockerfile
   retention/  sweep, adaptive window, startup catch-up
   detection/  three detectors, shadow recording, self-scoring, silence
   alerting/   outbox, cooldown, best-effort mail delivery
+  observability/  correlation id, the four meters, the cardinality ceiling
   static/     the triage console: an empty shell, its stylesheet and its script
 web/       Next.js 16 App Router, deployed to Vercel
   app/        groups, charts, alerts, detector scorecard, how grouping works
@@ -1246,7 +1355,7 @@ shape.
 | Service | Key |
 |---|---|
 | Render | `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, `INGEST_API_KEY`, `JAVA_TOOL_OPTIONS` |
-| Render, optional | `CONSOLE_API_KEY`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
+| Render, optional | `CONSOLE_API_KEY`, `LOGGING_STRUCTURED_FORMAT_CONSOLE`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
 | Vercel | `DATABASE_URL` |
 | GitHub secrets | `COLLECTOR_URL`, `INGEST_API_KEY` — the sweep no-ops without them, so a fork does not fail every three hours |
 
@@ -1782,13 +1891,13 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **179** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Backend | **192** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **26** | `node --test` |
 | Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
 | Dashboard, rendered | **23** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **307** | the number on the badge at the top |
+| **Total** | **320** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them

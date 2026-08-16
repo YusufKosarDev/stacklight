@@ -29,10 +29,15 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        # prometheus is exposed but not public: ApiKeyFilter guards it with the console
+        # key. health stays open because it is the uptime-ping target and the deploy gate.
+        include: health,prometheus
   endpoint:
     health:
       show-details: never
+  metrics:
+    tags:
+      service: stacklight-backend
   health:
     # Deliberately off: /actuator/health is the uptime-ping target, and a DB
     # check on every ping would keep the Neon compute awake around the clock.
@@ -150,6 +155,27 @@ spring.mail:
     mail.smtp.writetimeout: 10000
 
 logging:
+  # Structured (JSON) logging is built in and is deliberately not switched on here.
+  #
+  #   LOGGING_STRUCTURED_FORMAT_CONSOLE=ecs        (or logstash, or gelf)
+  #
+  # Set that variable where something is going to read the JSON. Render's own log viewer
+  # is not that something: it filters by level and instance and greps with RE2, and it
+  # does not parse arbitrary fields, so turning this on with nothing at the other end
+  # trades a readable log for an unreadable one and buys no new way to search it.
+  #
+  # Left out of this file rather than defaulted to blank, because the property has no
+  # value that means "off" -- absent is the off.
+  #
+  # The correlation id rides along either way: it lives in the MDC, so the plain format
+  # carries it in the line below and the JSON formats carry it as a field.
+
+  # Boot's default console pattern already has a slot for this, between the level and the
+  # logger name. Filling it is what puts the request id on a plain-text line without
+  # rewriting the whole pattern and inheriting the job of maintaining it.
+  pattern:
+    correlation: "[%X{requestId:-}] "
+
   level:
     root: INFO
     dev.stacklight: INFO

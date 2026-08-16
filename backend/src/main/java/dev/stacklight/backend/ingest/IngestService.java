@@ -8,6 +8,7 @@ import dev.stacklight.backend.grouping.Fingerprint;
 import dev.stacklight.backend.grouping.FingerprinterRegistry;
 import dev.stacklight.backend.grouping.GroupingInput;
 import dev.stacklight.backend.grouping.Platform;
+import dev.stacklight.backend.observability.PipelineMetrics;
 import dev.stacklight.backend.retention.RetentionService;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,6 +38,7 @@ public class IngestService {
     private final SelfScoringService selfScoringService;
     private final AlertService alertService;
     private final AlertDispatcher alertDispatcher;
+    private final PipelineMetrics metrics;
     private final int hourlyCapPerGroup;
 
     IngestService(
@@ -49,6 +51,7 @@ public class IngestService {
             SelfScoringService selfScoringService,
             AlertService alertService,
             AlertDispatcher alertDispatcher,
+            PipelineMetrics metrics,
             @Value("${stacklight.ingest.hourly-cap-per-group:200}") int hourlyCapPerGroup) {
         this.eventStore = eventStore;
         this.groupStore = groupStore;
@@ -59,6 +62,7 @@ public class IngestService {
         this.selfScoringService = selfScoringService;
         this.alertService = alertService;
         this.alertDispatcher = alertDispatcher;
+        this.metrics = metrics;
         this.hourlyCapPerGroup = hourlyCapPerGroup;
     }
 
@@ -80,6 +84,9 @@ public class IngestService {
 
     @Transactional
     public Result ingest(UUID eventId, IngestRequest request) {
+        long startedAt = System.nanoTime();
+
+        long groupingStartedAt = System.nanoTime();
         Fingerprint fingerprint =
                 fingerprinters
                         .active()
@@ -90,6 +97,7 @@ public class IngestService {
                                         request.resolvedExceptionType(),
                                         request.message(),
                                         request.resolvedStacktrace()));
+        metrics.grouped(System.nanoTime() - groupingStartedAt);
 
         // Order matters. The event is written first so that a repeated event_id is
         // rejected by the unique constraint before any counter is touched; doing the
@@ -97,6 +105,7 @@ public class IngestService {
         // delivery it had already made.
         boolean stored = eventStore.insert(eventId, request, fingerprint.platform().wireName());
         if (!stored) {
+            metrics.ingested("duplicate", System.nanoTime() - startedAt);
             return Result.duplicate();
         }
 
@@ -139,6 +148,11 @@ public class IngestService {
                     selfScoringService.scoreIfDue();
                     alertDispatcher.requestDrain();
                 });
+
+        // Recorded after the work and before the return, so the timer covers the whole
+        // transaction body. The drains queued above are deliberately outside it: they run
+        // after the commit and are not what a caller waited for.
+        metrics.ingested(withinCap ? "stored" : "sampled", System.nanoTime() - startedAt);
 
         return new Result(true, fingerprint, filed.groupId(), !withinCap, filed.broughtItBack());
     }
