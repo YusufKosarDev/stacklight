@@ -126,17 +126,20 @@ dashboard served everything in under half a second. A running instance answers i
 0.19 to 0.53 seconds, measured repeatedly, so 104 seconds is not a slow reply —
 it is a service that was not there.
 
-Two things make this the better of the controls taken. The gap between the two
-requests is two seconds rather than the seven of the earlier one, which leaves
-less room for the argument that the service went to sleep in between. And it was
-taken **after** the run that changed the active detector, so it says the read path
-is still independent following the most recent work on it rather than at some
-earlier point.
+This is the sharpest of the three controls taken, and the two seconds are why:
+the gap leaves less room for the argument that the service went to sleep in
+between, where an earlier pair left seven. It is also the one where the
+dashboard's own compute was already warm, so 0.39 seconds is the read path
+answering rather than the read path waking.
 
-The full control, and the static check in CI that stops the read path quietly
-acquiring a dependency on the service that is supposed to be optional, are in
-[The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it).
-It is re-measured whenever the read path changes.
+It is not the most recent. That is a third pair taken after step 10 gave the
+ingestion service a write surface and a page of its own — the first time the
+claim was tested against a change to the *other* half rather than to the
+dashboard. It is in
+[The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it),
+with the static check in CI that stops the read path quietly acquiring a
+dependency on the service that is supposed to be optional. The pair is re-taken
+whenever either half changes.
 
 The same thing on film, both halves live and neither of them staged, is the
 second clip at the top of this file — 0.80 seconds against 104.9, side by side,
@@ -1430,7 +1433,7 @@ missing is not the mechanism but traffic with a shape that trips it.
 | *(the four rows above predate the redesign; re-measured below)* | |
 | First request after a fully idle period | 1.8–3.3 s (see below) |
 | Neon query time from `fra1` | 6–16 ms |
-| Ingestion cold start | **95, 104, 104, 104, 104, 106, 114, 116 s**, measured eight times |
+| Ingestion cold start | **95, 104, 104, 104, 104, 105, 106, 114, 116 s**, measured nine times |
 | Ingestion when warm | 0.19–0.53 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
 
@@ -1445,18 +1448,21 @@ that is supposed to be optional, so the claim is measured again rather than
 inherited.
 
 To confirm the service was genuinely asleep rather than merely idle, the next
-request after the measurement was timed. Twice, months of work apart:
+request after the measurement was timed. Three times now:
 
 ```
-07:41:27   dashboard   200 in 0.39 s — 15 groups, charts, alerts, scorecard
+07:41:27   dashboard   200 in   0.39 s — 15 groups, charts, alerts, scorecard
 07:41:29   ingestion   200 in 104.38 s          <- two seconds later
 
-22:41:10   dashboard   200 in 0.40 s — 9 groups, charts, alerts, scorecard
+22:41:10   dashboard   200 in   0.40 s — 9 groups, charts, alerts, scorecard
 22:41:17   ingestion   200 in 104.2 s           <- seven seconds later
+
+13:27:11   dashboard   200 in   2.02 s
+13:28:56   ingestion   200 in 104.73 s          <- two seconds later
 ```
 
-The first is the stronger of the two and is the one quoted at the top of this
-file. Two seconds between the requests leaves less room to argue the service
+The first is the stronger of the first two and is the one quoted at the top of
+this file. Two seconds between the requests leaves less room to argue the service
 happened to fall asleep in the gap, and it was taken after the traffic run that
 changed the active detector — so it speaks for the read path as it stands rather
 than as it stood two steps ago. The second is kept because a claim tested once is
@@ -1467,10 +1473,27 @@ the dashboard served everything — group list, sparklines, storage status, tren
 charts, frame breakdown, fingerprint input, similar groups, alerts and the
 detector scorecard — in under half a second.
 
-So during the same window in which the ingestion service could not answer at all,
-the dashboard served everything — group list, sparklines, storage status, trend
-charts, frame breakdown, fingerprint input, similar groups, alerts and the
-detector scorecard — in under half a second.
+**The third is here for a different reason, and it is the one this section had
+been missing.** Every earlier measurement followed work on the read path — a
+lateral join, a sparkline query, two new pages — and answered the question *did
+the dashboard pick up a dependency on the service by accident*. Step 10 asked the
+opposite question for the first time. It added a **write** surface to the
+ingestion service: a triage console with its own key, its own endpoint and its own
+page, served from the same instance. A new place to change data is exactly the
+sort of thing that quietly becomes a link from the dashboard, then a fetch, then a
+shared module. It did not. `web/` was not touched, and the dashboard still renders
+while the service now holding the console takes a hundred seconds to come back.
+
+**Two things about that third pair, stated rather than smoothed over.** The
+dashboard's 2.02 s is not the 0.39 s above, and the difference is not the
+dashboard having got slower — both halves of the read path were cold at that
+moment. Neon's compute had scaled to zero and the Vercel function was cold with
+it, which [the section on it](#the-read-path-has-its-own-cold-start-and-it-is-not-free)
+puts at 1.8 to 5.6 seconds; a warm request shortly after measured 0.57 s. And only
+the status and the timing were captured at 13:27, **not the body**. So this pair
+says the dashboard *answered* in two seconds while the collector could not answer
+at all, and it does not by itself say what the page contained. The check that
+asserts content against a cold collector is the weekly one below.
 
 ### What guards the bet when nobody is measuring it
 
@@ -1840,7 +1863,7 @@ visitor who arrives first does feel it.
 
 **Cold starts are worse than the platform documents.** Render describes roughly
 a minute; the first three measurements were 95, 104 and 114 seconds, and none of
-the eight now on record has come in under 95. The first returned **503** rather
+the nine now on record has come in under 95. The first returned **503** rather
 than waiting — the platform gave up before the service finished starting.
 
 This decides the shape of the client library in a later step. A caller must
