@@ -13,7 +13,7 @@ const LINKS: { key: NavSection; href: string; label: string }[] = [
 function countFor(key: NavSection, counts: NavCounts | null): number | null {
   if (!counts) return null;
   if (key === "groups") return counts.open_groups;
-  if (key === "alerts") return counts.recent_alerts;
+  if (key === "alerts") return counts.alerts;
   return null;
 }
 

@@ -157,24 +157,32 @@ export async function countsByStatus(
 }
 
 /**
- * Hourly totals across everything the current filter selects.
+ * Daily totals across everything the current filter selects, over a week.
  *
  * A sum in the database rather than in the page. The overview used to add up
  * every group's sparkline in JavaScript, which was fine at nine groups and
  * becomes a full table read at nine hundred -- and once the list is paged,
  * summing the visible rows would quietly change the chart's meaning from "all
  * events" to "events on this page".
+ *
+ * A week rather than a day, and the reason is the rollup table's whole purpose.
+ * Raw events are deleted after fourteen days while the counts are kept for good,
+ * so the front page being able to show only the last 24 hours contradicted the
+ * claim the table exists to make: a service that reports in bursts and then goes
+ * quiet -- which is most of them here -- showed an empty chart while the history
+ * behind it was intact. Day buckets over seven days, the same shape the group
+ * page already uses for its `7d` range.
  */
 export async function getOverviewTrend(
   filters: GroupFilters,
-): Promise<{ hourly: number[]; total: number }> {
+): Promise<{ daily: number[]; total: number }> {
   const rows = (await sql()`
     select coalesce(sum(r.event_count), 0)::int as count
-      from generate_series(date_trunc('hour', now()) - interval '23 hours',
-                           date_trunc('hour', now()),
-                           interval '1 hour') as bucket
+      from generate_series(date_trunc('day', now()) - make_interval(days => 6),
+                           date_trunc('day', now()),
+                           interval '1 day') as bucket
       left join event_rollups r
-             on r.bucket_start = bucket
+             on date_trunc('day', r.bucket_start) = bucket
             and r.group_id in (
                   select g.id from event_groups g
                    where (${filters.service}::text is null or g.service = ${filters.service})
@@ -185,8 +193,8 @@ export async function getOverviewTrend(
      order by bucket
   `) as { count: number }[];
 
-  const hourly = rows.map((row) => row.count);
-  return { hourly, total: hourly.reduce((sum, n) => sum + n, 0) };
+  const daily = rows.map((row) => row.count);
+  return { daily, total: daily.reduce((sum, n) => sum + n, 0) };
 }
 
 /** Distinct services, for the filter's dropdown. */
@@ -199,11 +207,15 @@ export async function listServices(): Promise<string[]> {
 }
 
 /**
- * Last 24 hourly counts for every group at once.
+ * Last seven daily counts for every group at once.
  *
  * One query for the whole list rather than one per row: the sparklines are a column
  * of the table, not a detail view, and a query per row turns a page render into a
  * hundred round trips.
+ *
+ * Days rather than hours so a row reads at the same scale as the chart above it.
+ * A sparkline on a different window from the trend it sits under is a chart that
+ * disagrees with its own page.
  */
 export async function listSparklines(
   groupIds: number[],
@@ -216,18 +228,19 @@ export async function listSparklines(
 
   const rows = (await sql()`
     select r.group_id,
-           extract(epoch from (date_trunc('hour', now()) - r.bucket_start)) / 3600 as hours_ago,
-           r.event_count::int as event_count
+           extract(day from (date_trunc('day', now()) - date_trunc('day', r.bucket_start))) as days_ago,
+           sum(r.event_count)::int as event_count
       from event_rollups r
      where r.group_id = any(${groupIds}::bigint[])
-       and r.bucket_start > date_trunc('hour', now()) - interval '24 hours'
-  `) as { group_id: number; hours_ago: number; event_count: number }[];
+       and r.bucket_start >= date_trunc('day', now()) - make_interval(days => 6)
+     group by r.group_id, days_ago
+  `) as { group_id: number; days_ago: number; event_count: number }[];
 
   const byGroup = new Map<number, number[]>();
   for (const row of rows) {
-    const series = byGroup.get(row.group_id) ?? new Array(24).fill(0);
-    const index = 23 - Math.round(Number(row.hours_ago));
-    if (index >= 0 && index < 24) {
+    const series = byGroup.get(row.group_id) ?? new Array(7).fill(0);
+    const index = 6 - Math.round(Number(row.days_ago));
+    if (index >= 0 && index < 7) {
       series[index] = row.event_count;
     }
     byGroup.set(row.group_id, series);
@@ -417,20 +430,26 @@ export async function getStorageStatus(): Promise<StorageStatus> {
   return rows[0];
 }
 
-export type NavCounts = { open_groups: number; recent_alerts: number };
+export type NavCounts = { open_groups: number; alerts: number };
 
 /**
  * The two numbers the sidebar carries, in one round trip.
  *
  * Counted rather than derived from listGroups() because the sidebar renders on
  * every route, including the ones that never load a group list.
+ *
+ * The alert count deliberately has no time window. It used to count the last
+ * seven days while the page it links to lists every alert there is, so the
+ * number in the nav and the number of rows on the page disagreed -- 34 against
+ * 37 on the day this was noticed. A count beside a link should count what the
+ * link leads to, and a window that quietly empties as a deployment goes idle is
+ * a nav item that reports zero while the page behind it is full.
  */
 export async function getNavCounts(): Promise<NavCounts> {
   const rows = (await sql()`
     select (select count(*)::int from event_groups
              where status in ('open', 'regressed'))            as open_groups,
-           (select count(*)::int from alerts
-             where created_at > now() - interval '7 days')     as recent_alerts
+           (select count(*)::int from alerts)                  as alerts
   `) as NavCounts[];
 
   return rows[0];

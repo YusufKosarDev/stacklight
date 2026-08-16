@@ -52,7 +52,7 @@ type Scenario = {
   groups: GroupSummary[];
   nextCursor: string | null;
   counts: Record<string, number>;
-  trend: { hourly: number[]; total: number };
+  trend: { daily: number[]; total: number };
   services: string[];
   sparklines: Map<number, number[]>;
   storage: StorageStatus;
@@ -183,7 +183,7 @@ function blank(): Scenario {
     groups: [],
     nextCursor: null,
     counts: {},
-    trend: { hourly: new Array(24).fill(0), total: 0 },
+    trend: { daily: new Array(7).fill(0), total: 0 },
     services: [],
     sparklines: new Map(),
     storage: EMPTY_STORAGE,
@@ -192,7 +192,7 @@ function blank(): Scenario {
     similar: [],
     alerts: [],
     detectors: [],
-    navCounts: { open_groups: 0, recent_alerts: 0 },
+    navCounts: { open_groups: 0, alerts: 0 },
   };
 }
 
@@ -213,7 +213,7 @@ export async function countsByStatus(): Promise<Record<string, number>> {
   return scenario.counts;
 }
 
-export async function getOverviewTrend(): Promise<{ hourly: number[]; total: number }> {
+export async function getOverviewTrend(): Promise<{ daily: number[]; total: number }> {
   return scenario.trend;
 }
 

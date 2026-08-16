@@ -20,11 +20,15 @@ keeps working while the service that collects them is asleep.**
 
 </div>
 
-**Status: step 6.** Events are grouped into distinct faults, counted into an
+**Status: step 12.** Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
 otherwise take the project down, watched by three detectors whose relative merits
 are measured rather than assumed, delivered by clients written around a collector
-that sleeps, and read through an interface that ships no JavaScript of its own.
+that sleeps, read through an interface that ships no JavaScript of its own,
+triaged from a console the ingestion service serves itself behind a second key,
+and instrumented on the write path. Three checks guard the claim the rest of it
+rests on, and one of them is a request made against the deployment rather than
+against the repository.
 
 | | |
 |---|---|
@@ -1596,6 +1600,35 @@ The path from a qualifying group to an alert row is covered by nine tests agains
 a real PostgreSQL, including the positive case and the one that matches this
 deployment exactly — busy yesterday, nothing since, correctly silent. What is
 missing is not the mechanism but traffic with a shape that trips it.
+
+**That paragraph was true when it was written and stopped being true the next
+day.** It is left standing rather than quietly edited, because what falsified it
+is the more useful half. The missing traffic arrived: the generated scenario ran from
+15:43 on 11 August to 06:57 on 13 August, and one of its six profiles —
+`session-store`, busy for half a day and then dead — was written to produce
+exactly the shape the rule looks for.
+
+**The rule found it the following morning.**
+
+| Alert | Raised | Service |
+|---|---|---|
+| 14 | 12 Aug, 07:56 | `session-store` |
+| 33–36 | 13 Aug, 05:38 | `checkout-api`, `media-transcoder`, `notification-worker`, `payments-api` |
+
+The first is the designed case doing what it was designed to do. The other four
+are an accident worth more than the design: when the scenario ended, every service
+in it went quiet at once, and the next sweep found four groups that had a habit
+and had stopped. **Five silence alerts in production, from the one signal the
+ingest path cannot produce** — no event arrives to trigger it, so only a caller
+from outside can ever notice.
+
+All five were recorded with `delivery_state = disabled`, because no mail was
+configured at the time. That is the outbox design being right rather than a
+failure: the row is written in the same transaction as the sweep that found it,
+and delivery is a separate concern that was switched off.
+
+So the sentence above was accurate about 11 August and wrong about the project.
+The mechanism was never the doubt; the traffic was, and the traffic came.
 
 ### Grouping, on the live deployment
 
