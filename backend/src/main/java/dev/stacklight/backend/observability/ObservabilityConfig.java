@@ -13,13 +13,21 @@ public class ObservabilityConfig {
      * Ahead of the key check, so a rejected request still gets an id and still appears in
      * the log as one line rather than as an orphan. A 401 is a thing worth being able to
      * count, and it is the shape an attack would take.
+     *
+     * <p>{@code HIGHEST_PRECEDENCE} rather than something below it: that constant is
+     * {@link Integer#MIN_VALUE}, so subtracting from it overflows into the largest positive
+     * order there is and runs the filter last. This one was written as
+     * {@code HIGHEST_PRECEDENCE - 10} first, and the symptom was a 401 with no id on it --
+     * the key check had already answered before this ever ran. The ordering is spelled out
+     * in {@code IngestConfig} instead, which moves the key check down rather than moving
+     * this up.
      */
     @Bean
     FilterRegistrationBean<CorrelationIdFilter> correlationIdFilter() {
         FilterRegistrationBean<CorrelationIdFilter> registration =
                 new FilterRegistrationBean<>(new CorrelationIdFilter());
-        registration.addUrlPatterns("/api/*");
-        registration.setOrder(Ordered.HIGHEST_PRECEDENCE - 10);
+        registration.addUrlPatterns("/api/*", "/actuator/prometheus");
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;
     }
 

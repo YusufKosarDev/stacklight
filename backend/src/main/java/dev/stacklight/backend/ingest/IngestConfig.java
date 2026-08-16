@@ -50,7 +50,9 @@ public class IngestConfig {
         // /actuator/health is deliberately absent: it is the uptime-ping target and the
         // deploy gate, and it must answer without a secret.
         registration.addUrlPatterns("/api/*", "/actuator/prometheus");
-        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        // Just below the correlation filter, so a rejected request still carries an id.
+        // Still ahead of everything else: nothing should run before the key is checked.
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);
         return registration;
     }
 }
