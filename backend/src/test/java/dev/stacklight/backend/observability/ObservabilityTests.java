@@ -193,11 +193,23 @@ class ObservabilityTests {
                         (org.springframework.beans.factory.config.ConfigurableListableBeanFactory)
                                 context.getAutowireCapableBeanFactory());
 
-        String matched =
-                report.getConditionAndOutcomesBySource().entrySet().stream()
-                        .filter(e -> e.getKey().toLowerCase().contains("prometheus"))
-                        .map(e -> e.getKey() + " -> " + e.getValue())
-                        .collect(java.util.stream.Collectors.joining(" ;; "));
+        StringBuilder matched = new StringBuilder();
+        report.getConditionAndOutcomesBySource()
+                .forEach(
+                        (source, outcomes) -> {
+                            if (!source.toLowerCase().contains("prometheus")) {
+                                return;
+                            }
+                            matched.append("\n  SOURCE ")
+                                    .append(source.substring(source.lastIndexOf('.') + 1))
+                                    .append(":");
+                            outcomes.forEach(
+                                    outcome ->
+                                            matched.append("\n     match=")
+                                                    .append(outcome.getOutcome().isMatch())
+                                                    .append(" :: ")
+                                                    .append(outcome.getOutcome().getMessage()));
+                        });
 
         String unstarted =
                 report.getUnconditionalClasses().stream()
