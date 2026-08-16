@@ -70,12 +70,7 @@ class ObservabilityTests {
                 get("/actuator/prometheus", "X-Stacklight-Console-Key", CONSOLE_KEY);
 
         assertThat(response.statusCode())
-                .withFailMessage(
-                        "expected 200 but got %s. prometheus-related beans: %s",
-                        response.statusCode(),
-                        java.util.Arrays.stream(context.getBeanDefinitionNames())
-                                .filter(n -> n.toLowerCase().contains("prometheus"))
-                                .collect(java.util.stream.Collectors.joining(", ")))
+                .withFailMessage("expected 200 but got %s. %s", response.statusCode(), whyNoPrometheus())
                 .isEqualTo(200);
         assertThat(response.body()).contains("jvm_memory_used_bytes");
     }
@@ -190,6 +185,32 @@ class ObservabilityTests {
     }
 
     // ---- plumbing ---------------------------------------------------------------------
+
+    /** Temporary: asks the context why the Prometheus autoconfiguration did not run. */
+    private String whyNoPrometheus() {
+        var report =
+                org.springframework.boot.autoconfigure.condition.ConditionEvaluationReport.get(
+                        (org.springframework.beans.factory.config.ConfigurableListableBeanFactory)
+                                context.getAutowireCapableBeanFactory());
+
+        String matched =
+                report.getConditionAndOutcomesBySource().entrySet().stream()
+                        .filter(e -> e.getKey().toLowerCase().contains("prometheus"))
+                        .map(e -> e.getKey() + " -> " + e.getValue())
+                        .collect(java.util.stream.Collectors.joining(" ;; "));
+
+        String unstarted =
+                report.getUnconditionalClasses().stream()
+                        .filter(c -> c.toLowerCase().contains("prometheus"))
+                        .collect(java.util.stream.Collectors.joining(", "));
+
+        boolean registryClassPresent =
+                org.springframework.util.ClassUtils.isPresent(
+                        "io.micrometer.prometheusmetrics.PrometheusMeterRegistry", null);
+
+        return "registryClassOnClasspath=%s | exclusions=%s | unconditional=%s | report=%s"
+                .formatted(registryClassPresent, report.getExclusions(), unstarted, matched);
+    }
 
     private String base() {
         return "http://localhost:" + port;
