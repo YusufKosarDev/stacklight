@@ -202,8 +202,9 @@ all there is and is used instead — the group says so on its page.
 
 **Minified frames are detected, not grouped on.** Minified names are reassigned
 on every build, so a fingerprint built from them opens a fresh group per deploy,
-which is worse than not grouping. Resolving them properly needs source maps,
-which this project does not accept yet.
+which is worse than not grouping. Resolving them properly needs source maps, and
+this project does not accept them — for reasons that were
+[measured rather than assumed](#source-maps-and-the-promise-they-would-break).
 
 ### Why old groups are frozen when the algorithm changes
 
@@ -287,6 +288,70 @@ a fingerprint deliberately will not: renaming `CartService.total` to
 own group, but the two are shown as related at a similarity of 1.00.
 
 They are suggestions. Nothing merges on its own, and no model is involved.
+
+### Source maps, and the promise they would break
+
+Resolving minified frames is the obvious next thing to want here, and it is the
+feature this file would most like to claim. It is not built. This section is what
+was found while working out whether it could be, because *"not yet"* was standing
+in for a reason nobody had checked.
+
+**Where the maps would come from rules out two of the three routes.** Fetching
+them from `sourceMappingURL` does not work: production bundles do not publish
+maps, and this project's own build is the example — **zero client-side map files**
+come out of it, because Next.js leaves `productionBrowserSourceMaps` off by
+default. Resolving in the client means shipping the map inside the application and
+doing the work in a process that is already handling a failure, which is the
+opposite of a capture that returns in 19.8 µs. That leaves uploading a map per
+release, so the question becomes storage.
+
+**And storage is where the arithmetic stops being comfortable.** Measured on this
+repository's own dashboard — six routes, four runtime dependencies:
+
+| | |
+|---|---|
+| Production source maps | **6.39 MB** across 51 files |
+| The same build including dev chunks | 21.89 MB, 111 files |
+| Distinct releases already in `events` | **11** |
+| Those releases, if each kept its maps | **~70 MB** |
+| The ceiling, and what is used today | **512 MB**, 10.4 MB |
+
+Old maps cannot be dropped, because an error from 1.4.0 needs 1.4.0's map to mean
+anything. Retention exists here to keep the database from filling and taking the
+project down with it; maps would eat that budget far faster than events ever have.
+
+**The storage is survivable. The next part is not.** This section of the file
+opens by saying that nothing in the pipeline is free to change its mind between
+two runs, and source map resolution would make that false. A group's identity
+would depend on whether the map had been uploaded before or after the event
+arrived — the same fault landing in two groups depending on the order of two
+unrelated actions. Sentry solves this by reprocessing, which means keeping raw
+events until the artifacts show up. Keeping raw events indefinitely is the one
+thing a 512 MB ceiling forbids.
+
+**The gate this project sets for itself could not be run.** Resolved frames change
+the fingerprint input, so they need a new fingerprint version, and a version moves
+only after `GET /api/grouping/replay?version=N` reports the merges and splits it
+would cause. The replay reads raw stack traces from `events` and would need each
+event's release map alongside them. Retention deletes those traces after fourteen
+days. This is not version 2's situation, where the report ran and found nothing —
+here the report cannot be run at all.
+
+**What the feature would be worth today is one group.** Of fifteen groups in
+production, exactly one is flagged `minified`: a single event sent by hand on 7
+August to prove the flag works. The clients are Node-only and the browser is
+deliberately out of scope, so minified browser frames — the case source maps exist
+for — cannot reach this collector by any supported route.
+
+**One narrower version does survive all of that, and was still not built.** Only
+`fingerprint_input` is hashed; the parsed frames are a separate column kept for
+display. So frames could be resolved for the group page without touching a single
+hash — no re-partitioning, no determinism problem, grouping exactly as it is and
+only the presentation improved. It was left alone because it would buy better
+frames on that one group in exchange for an upload endpoint, a retention policy
+for artifacts, and a hand-written VLQ decoder. The option is recorded here rather
+than forgotten, because the arithmetic changes the moment this collector accepts
+browser events.
 
 ---
 
