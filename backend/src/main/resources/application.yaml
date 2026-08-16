@@ -35,6 +35,17 @@ management:
   endpoint:
     health:
       show-details: never
+  # Spring Boot 4 turns every metrics exporter off by default -- management.defaults
+  # .metrics.export.enabled is false, where Boot 3 had it true -- so exposing the endpoint
+  # is not enough on its own and the symptom is a 404 with the registry, its client and the
+  # autoconfiguration all present. Enabled for Prometheus specifically rather than through
+  # the blanket default, so adding another registry to the classpath later does not switch
+  # an exporter on by accident.
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
   metrics:
     tags:
       service: stacklight-backend

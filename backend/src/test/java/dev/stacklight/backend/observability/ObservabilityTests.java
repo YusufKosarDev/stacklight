@@ -12,7 +12,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -47,8 +46,6 @@ class ObservabilityTests {
 
     @Autowired private Environment environment;
 
-    @Autowired private ApplicationContext context;
-
     // ---- who may read the metrics -------------------------------------------------
 
     @Test
@@ -69,9 +66,7 @@ class ObservabilityTests {
         HttpResponse<String> response =
                 get("/actuator/prometheus", "X-Stacklight-Console-Key", CONSOLE_KEY);
 
-        assertThat(response.statusCode())
-                .withFailMessage("expected 200 but got %s. %s", response.statusCode(), whyNoPrometheus())
-                .isEqualTo(200);
+        assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).contains("jvm_memory_used_bytes");
     }
 
@@ -185,44 +180,6 @@ class ObservabilityTests {
     }
 
     // ---- plumbing ---------------------------------------------------------------------
-
-    /** Temporary: asks the context why the Prometheus autoconfiguration did not run. */
-    private String whyNoPrometheus() {
-        var report =
-                org.springframework.boot.autoconfigure.condition.ConditionEvaluationReport.get(
-                        (org.springframework.beans.factory.config.ConfigurableListableBeanFactory)
-                                context.getAutowireCapableBeanFactory());
-
-        StringBuilder matched = new StringBuilder();
-        report.getConditionAndOutcomesBySource()
-                .forEach(
-                        (source, outcomes) -> {
-                            if (!source.toLowerCase().contains("prometheus")) {
-                                return;
-                            }
-                            matched.append("\n  SOURCE ")
-                                    .append(source.substring(source.lastIndexOf('.') + 1))
-                                    .append(":");
-                            outcomes.forEach(
-                                    outcome ->
-                                            matched.append("\n     match=")
-                                                    .append(outcome.getOutcome().isMatch())
-                                                    .append(" :: ")
-                                                    .append(outcome.getOutcome().getMessage()));
-                        });
-
-        String unstarted =
-                report.getUnconditionalClasses().stream()
-                        .filter(c -> c.toLowerCase().contains("prometheus"))
-                        .collect(java.util.stream.Collectors.joining(", "));
-
-        boolean registryClassPresent =
-                org.springframework.util.ClassUtils.isPresent(
-                        "io.micrometer.prometheusmetrics.PrometheusMeterRegistry", null);
-
-        return "registryClassOnClasspath=%s | exclusions=%s | unconditional=%s | report=%s"
-                .formatted(registryClassPresent, report.getExclusions(), unstarted, matched);
-    }
 
     private String base() {
         return "http://localhost:" + port;
