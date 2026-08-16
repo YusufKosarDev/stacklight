@@ -1146,6 +1146,23 @@ the same reason the console does: it names every endpoint, every status code and
 the shape of the traffic. `/actuator/health` stays open — it is the uptime target
 and the deploy gate, and it must answer without a secret.
 
+**One thing this cost two runs to find.** The endpoint answered 404 with the
+registry, the Prometheus client and the autoconfiguration all on the classpath
+and the exposure list naming it, which rules out every explanation the symptom
+suggests. Spring Boot 4 turns metrics exporters **off** by default where Boot 3
+had them on, so exposing an endpoint is no longer enough to have one:
+
+```
+@ConditionalOnEnabledMetricsExport
+management.defaults.metrics.export.enabled is considered false
+```
+
+Nothing in the dependency tree or the exposure list hints at it, and the
+condition evaluation report read from inside the running context is what said so.
+It is switched on for Prometheus specifically rather than through the blanket
+default, so another registry landing on the classpath later cannot turn an
+exporter on by accident.
+
 ### Nothing sensitive reaches a log line
 
 No log statement carries an error message, a stack trace, a recipient address or
