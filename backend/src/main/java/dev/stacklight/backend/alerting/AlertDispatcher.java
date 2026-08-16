@@ -1,5 +1,6 @@
 package dev.stacklight.backend.alerting;
 
+import dev.stacklight.backend.observability.PipelineMetrics;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -34,17 +35,20 @@ public class AlertDispatcher {
     private final AlertProperties properties;
     private final ObjectProvider<JavaMailSender> mailSender;
     private final TaskExecutor taskExecutor;
+    private final PipelineMetrics metrics;
     private final AtomicBoolean draining = new AtomicBoolean();
 
     AlertDispatcher(
             AlertStore alertStore,
             AlertProperties properties,
             ObjectProvider<JavaMailSender> mailSender,
-            TaskExecutor taskExecutor) {
+            TaskExecutor taskExecutor,
+            PipelineMetrics metrics) {
         this.alertStore = alertStore;
         this.properties = properties;
         this.mailSender = mailSender;
         this.taskExecutor = taskExecutor;
+        this.metrics = metrics;
     }
 
     /** Kicks a drain onto a background thread. Never blocks the caller. */
@@ -86,9 +90,11 @@ public class AlertDispatcher {
                 try {
                     sender.send(compose(alert));
                     alertStore.markSent(alert.id());
+                    metrics.alertDelivery("delivered");
                     sent++;
                 } catch (RuntimeException e) {
                     alertStore.markFailed(alert.id(), e.getMessage(), properties.maxAttempts());
+                    metrics.alertDelivery("failed");
                     log.warn("alert delivery failed id={} attempt={}", alert.id(), alert.attempts() + 1, e);
                 }
             }

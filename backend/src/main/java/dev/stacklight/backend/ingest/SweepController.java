@@ -3,6 +3,7 @@ package dev.stacklight.backend.ingest;
 import dev.stacklight.backend.alerting.AlertDispatcher;
 import dev.stacklight.backend.detection.SelfScoringService;
 import dev.stacklight.backend.detection.SilenceService;
+import dev.stacklight.backend.observability.PipelineMetrics;
 import dev.stacklight.backend.retention.RetentionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,16 +57,19 @@ public class SweepController {
     private final RetentionService retentionService;
     private final SelfScoringService selfScoringService;
     private final AlertDispatcher alertDispatcher;
+    private final PipelineMetrics metrics;
 
     SweepController(
             SilenceService silenceService,
             RetentionService retentionService,
             SelfScoringService selfScoringService,
-            AlertDispatcher alertDispatcher) {
+            AlertDispatcher alertDispatcher,
+            PipelineMetrics metrics) {
         this.silenceService = silenceService;
         this.retentionService = retentionService;
         this.selfScoringService = selfScoringService;
         this.alertDispatcher = alertDispatcher;
+        this.metrics = metrics;
     }
 
     /**
@@ -86,6 +90,9 @@ public class SweepController {
         alertDispatcher.requestDrain();
 
         SweepResult result = new SweepResult(silenceAlerts, deletedEvents, scored);
+        // Counters rather than a gauge: what a sweep found is a total to add to, and the
+        // instance holding the number will be gone before the next one runs.
+        metrics.swept(silenceAlerts, (int) deletedEvents, scored);
         log.info(
                 "sweep silence_alerts={} deleted_events={} scored={}",
                 silenceAlerts,

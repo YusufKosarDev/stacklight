@@ -35,11 +35,21 @@ public class IngestConfig {
                 List.of(
                         ApiKeyFilter.Rule.of(
                                 "/api/groups", ApiKeyFilter.CONSOLE_HEADER, consoleKey),
+                        // Metrics name every endpoint, every status code and the shape of
+                        // the traffic, which is more than a public page should say. It sits
+                        // behind the console key rather than the ingest one for the same
+                        // reason the console does: reading operational detail is an
+                        // operator's job, not something every installation reporting errors
+                        // should be able to do.
+                        ApiKeyFilter.Rule.of(
+                                "/actuator/prometheus", ApiKeyFilter.CONSOLE_HEADER, consoleKey),
                         ApiKeyFilter.Rule.of("/api", ApiKeyFilter.INGEST_HEADER, ingestKey));
 
         FilterRegistrationBean<ApiKeyFilter> registration =
                 new FilterRegistrationBean<>(new ApiKeyFilter(rules));
-        registration.addUrlPatterns("/api/*");
+        // /actuator/health is deliberately absent: it is the uptime-ping target and the
+        // deploy gate, and it must answer without a secret.
+        registration.addUrlPatterns("/api/*", "/actuator/prometheus");
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;
     }
