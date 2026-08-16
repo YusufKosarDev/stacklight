@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -46,6 +47,8 @@ class ObservabilityTests {
 
     @Autowired private Environment environment;
 
+    @Autowired private ApplicationContext context;
+
     // ---- who may read the metrics -------------------------------------------------
 
     @Test
@@ -66,7 +69,14 @@ class ObservabilityTests {
         HttpResponse<String> response =
                 get("/actuator/prometheus", "X-Stacklight-Console-Key", CONSOLE_KEY);
 
-        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.statusCode())
+                .withFailMessage(
+                        "expected 200 but got %s. prometheus-related beans: %s",
+                        response.statusCode(),
+                        java.util.Arrays.stream(context.getBeanDefinitionNames())
+                                .filter(n -> n.toLowerCase().contains("prometheus"))
+                                .collect(java.util.stream.Collectors.joining(", ")))
+                .isEqualTo(200);
         assertThat(response.body()).contains("jvm_memory_used_bytes");
     }
 
