@@ -15,7 +15,7 @@ keeps working while the service that collects them is asleep.**
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17%20on%20Neon-4169E1?logo=postgresql&logoColor=white)](https://neon.tech/)
 [![License](https://img.shields.io/github/license/YusufKosarDev/stacklight?color=yellow)](LICENSE)
 
-🔗 **Live: [stacklight-eosin.vercel.app](https://stacklight-eosin.vercel.app)**
+🔗 **Live: [getstacklight.vercel.app](https://getstacklight.vercel.app)**
 &nbsp;·&nbsp; no login, and it stays up when the collector does not
 
 </div>
@@ -166,7 +166,7 @@ be able to see why it did.
 
 Nothing in the pipeline is statistical, trained, or free to change its mind
 between two runs. Every group page shows its own worked example, and
-[/how-grouping-works](https://stacklight-eosin.vercel.app/how-grouping-works)
+[/how-grouping-works](https://getstacklight.vercel.app/how-grouping-works)
 explains the rules.
 
 ```
@@ -1871,7 +1871,7 @@ published, because a prediction edited after the fact is a description.
 Thirty hours, 2,163 events, 111 judged hours, nothing left awaiting hindsight.
 
 **These are the numbers as the run ended.** The
-[live scorecard](https://stacklight-eosin.vercel.app/detectors) has moved since and
+[live scorecard](https://getstacklight.vercel.app/detectors) has moved since and
 will keep moving: verifying the switch afterwards meant sending twenty more events,
 which `ewma` fired on and which the scorer has been judging ever since — it reads
 75% / 86% at the time of writing. The table below is the sample the decision was made

@@ -35,7 +35,7 @@ import { join } from "node:path";
 const require = createRequire(join(process.cwd(), "/"));
 const { chromium } = require("playwright");
 
-const DASHBOARD = "https://stacklight-eosin.vercel.app";
+const DASHBOARD = "https://getstacklight.vercel.app";
 const COLLECTOR = "https://stacklight.onrender.com/actuator/health";
 
 const VIEWPORT = { width: 1280, height: 720 };

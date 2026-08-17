@@ -51,7 +51,7 @@ jobs:
       - name: Read the dashboard
         id: dashboard
         env:
-          DASHBOARD_URL: https://stacklight-eosin.vercel.app
+          DASHBOARD_URL: https://getstacklight.vercel.app
         run: |
           # Three times. The first can be slow for a reason that is not the claim: Neon
           # suspends its compute when nobody is reading, and waking it costs a second or
