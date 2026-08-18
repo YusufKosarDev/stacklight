@@ -172,6 +172,21 @@ export async function countsByStatus(
  * quiet -- which is most of them here -- showed an empty chart while the history
  * behind it was intact. Day buckets over seven days, the same shape the group
  * page already uses for its `7d` range.
+ *
+ * ## Why the join is a range and not an equality
+ *
+ * The first version of this matched buckets with `date_trunc('day',
+ * r.bucket_start) = bucket`, which reads naturally and cannot use an index:
+ * wrapping the column in a function means `event_rollups_bucket_idx` no longer
+ * describes the value being compared, so every rollup row has to be read and
+ * truncated to find the seven days wanted. The scale experiment caught it --
+ * 1.1 ms at a thousand rollups, 975 ms at a million, on a query the front page
+ * runs on every load.
+ *
+ * Comparing the column against a half-open range instead leaves it untouched,
+ * the index applies, and each bucket costs a range scan over one day rather than
+ * a scan over all of history. The `generate_series` stays: it is what supplies
+ * days with no rows at all, which an index can find nothing to return for.
  */
 export async function getOverviewTrend(
   filters: GroupFilters,
@@ -182,7 +197,8 @@ export async function getOverviewTrend(
                            date_trunc('day', now()),
                            interval '1 day') as bucket
       left join event_rollups r
-             on date_trunc('day', r.bucket_start) = bucket
+             on r.bucket_start >= bucket
+            and r.bucket_start < bucket + interval '1 day'
             and r.group_id in (
                   select g.id from event_groups g
                    where (${filters.service}::text is null or g.service = ${filters.service})

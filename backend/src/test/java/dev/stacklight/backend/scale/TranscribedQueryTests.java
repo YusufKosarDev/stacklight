@@ -37,7 +37,10 @@ class TranscribedQueryTests {
                     "(g.last_seen, g.id) < (",
                     "group by g.status",
                     "date_trunc('day', now()) - make_interval(days => 6)",
-                    "date_trunc('day', r.bucket_start) = bucket",
+                    "r.bucket_start < bucket + interval '1 day'",
+                    // Still the shape getGroupSeries uses, where a selective group_id in
+                    // front of it means the unindexable truncation never costs anything.
+                    "and date_trunc('day', r.bucket_start) = bucket",
                     "where status in ('open', 'regressed')",
                     "order by a.created_at desc",
                     "where outcome is not null");
