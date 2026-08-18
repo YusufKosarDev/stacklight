@@ -102,7 +102,7 @@ final class ScaleSeeder {
                             group_id, fingerprint, fingerprint_version, platform,
                             exception_type, stacktrace, release)
                         select gen_random_uuid(),
-                               now() - make_interval(mins => (((i * 3) % 20160)::int)),
+                               now() - make_interval(mins => (((i::bigint * 3) % 20160)::int)),
                                g.service, g.level,
                                g.title,
                                g.id, g.fingerprint, 1, g.platform,
@@ -111,14 +111,12 @@ final class ScaleSeeder {
                                    || repeat('\tat com.example.Class.method(Class.java:42)' || chr(10), 12),
                                '1.' || (i % 30) || '.0'
                           from generate_series(1, :count) as i
-                          join lateral (
-                              select id, service, level, title, fingerprint, platform, exception_type
-                                from event_groups
-                               -- Weighted at the head, so the busiest groups own most rows.
-                               order by id
-                               offset (i * i) % greatest(1, (select count(*) from event_groups))
-                               limit 1
-                          ) g on true
+                          -- Joined on the primary key rather than walked with OFFSET. The
+                          -- offset form re-read the table for every row, and i * i overflowed
+                          -- an integer past 46,341 -- which is what stage four found.
+                          join event_groups g
+                            on g.id = (select min(id) from event_groups)
+                                    + ((i::bigint * i) % (select count(*) from event_groups))
                         """)
                 .param("count", count)
                 .update();
