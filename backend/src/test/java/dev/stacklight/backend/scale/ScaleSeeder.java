@@ -77,13 +77,21 @@ final class ScaleSeeder {
     /**
      * Hourly counts. Every group gets {@code hours} buckets, which is what makes this the
      * biggest table.
+     *
+     * <p>The buckets are spaced six hours apart rather than laid down back to back, for two
+     * reasons. A rollup row exists only for an hour that had events, and a group busy every
+     * single hour of its life is the least realistic shape there is. And a contiguous run
+     * puts the whole table inside the dashboard's seven-day window -- two hundred buckets
+     * end to end is eight days of history, so a query over the last week reads 84% of the
+     * rows and cannot be told apart from one that reads all of them. Spaced out, two hundred
+     * buckets span fifty days and the window is a slice, which is the thing being measured.
      */
     void rollups(int hours) {
         jdbc.sql(
                         """
                         insert into event_rollups (group_id, bucket_start, event_count)
                         select g.id,
-                               date_trunc('hour', now()) - make_interval(hours => (h::int)),
+                               date_trunc('hour', now()) - make_interval(hours => ((h * 6)::int)),
                                1 + ((g.id + h) % 40)
                           from event_groups g
                           cross join generate_series(0, :hours - 1) as h

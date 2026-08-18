@@ -226,6 +226,23 @@ class ScaleExperimentTests {
                  group by bucket order by bucket
                 """);
 
+        // The form the dashboard used before this experiment ran, kept so the two can be
+        // compared on the same rows in the same run rather than across two runs of
+        // different data. It is deliberately absent from queries.ts and therefore from the
+        // transcription guard: it is the shape that was replaced, and pinning it would
+        // require the file to keep serving it.
+        queries.put(
+                "getOverviewTrend (7d, superseded)",
+                """
+                select coalesce(sum(r.event_count), 0)::int as count
+                  from generate_series(date_trunc('day', now()) - make_interval(days => 6),
+                                       date_trunc('day', now()), interval '1 day') as bucket
+                  left join event_rollups r
+                         on date_trunc('day', r.bucket_start) = bucket
+                        and r.group_id in (select g.id from event_groups g)
+                 group by bucket order by bucket
+                """);
+
         queries.put(
                 "listSparklines (25 ids)",
                 """
