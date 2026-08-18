@@ -64,8 +64,8 @@ final class ScaleSeeder {
                                       'resolved','ignored','regressed'])[1 + i % 7],
                                -- Power law: the first groups carry most of the volume.
                                greatest(1, (200000 / (i + 3))::int),
-                               now() - make_interval(days => (i % 120)),
-                               now() - make_interval(mins => (i * 37) % 172800)
+                               now() - make_interval(days => ((i % 120)::int)),
+                               now() - make_interval(mins => (((i * 37) % 172800)::int))
                           from generate_series(:from, :to) as i
                         on conflict do nothing
                         """)
@@ -83,7 +83,7 @@ final class ScaleSeeder {
                         """
                         insert into event_rollups (group_id, bucket_start, event_count)
                         select g.id,
-                               date_trunc('hour', now()) - make_interval(hours => h),
+                               date_trunc('hour', now()) - make_interval(hours => (h::int)),
                                1 + ((g.id + h) % 40)
                           from event_groups g
                           cross join generate_series(0, :hours - 1) as h
@@ -102,7 +102,7 @@ final class ScaleSeeder {
                             group_id, fingerprint, fingerprint_version, platform,
                             exception_type, stacktrace, release)
                         select gen_random_uuid(),
-                               now() - make_interval(mins => (i * 3) % 20160),
+                               now() - make_interval(mins => (((i * 3) % 20160)::int)),
                                g.service, g.level,
                                g.title,
                                g.id, g.fingerprint, 1, g.platform,
@@ -158,10 +158,10 @@ final class ScaleSeeder {
                         select g.id,
                                (array['spike','new_group','silence','regression'])[1 + (g.id % 4)],
                                'ewma',
-                               date_trunc('hour', now()) - make_interval(hours => (g.id % 500)),
+                               date_trunc('hour', now()) - make_interval(hours => ((g.id % 500)::int)),
                                42, 4.0, 10.0, 3.0,
                                g.title,
-                               now() - make_interval(hours => (g.id % 500)),
+                               now() - make_interval(hours => ((g.id % 500)::int)),
                                (array['sent','disabled','pending','failed'])[1 + (g.id % 4)]
                           from event_groups g
                          order by g.id
