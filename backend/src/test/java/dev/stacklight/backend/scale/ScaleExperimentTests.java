@@ -88,11 +88,19 @@ class ScaleExperimentTests {
     void measureTheDataLayerAsItGrows() throws Exception {
         ScaleSeeder seeder = new ScaleSeeder(jdbc);
         List<String> report = new ArrayList<>();
+        // Printed as it is produced, not collected and printed at the end: a failure in
+        // a later stage would otherwise take the earlier ones down with it, and the
+        // stages that did complete are the measurement.
+        java.util.function.Consumer<String> say =
+                line -> {
+                    report.add(line);
+                    System.out.println(line);
+                };
 
-        report.add("");
-        report.add("=".repeat(96));
-        report.add("SCALE EXPERIMENT -- real PostgreSQL 17 in a container, container timings");
-        report.add("=".repeat(96));
+        say.accept("");
+        say.accept("=".repeat(96));
+        say.accept("SCALE EXPERIMENT -- real PostgreSQL 17 in a container, container timings");
+        say.accept("=".repeat(96));
 
         int groupsSoFar = 0;
 
@@ -105,9 +113,9 @@ class ScaleExperimentTests {
             seeder.alerts(stage.alerts() - (int) seeder.count("alerts"));
             seeder.analyze();
 
-            report.add("");
-            report.add("-".repeat(96));
-            report.add(
+            say.accept("");
+            say.accept("-".repeat(96));
+            say.accept(
                     "STAGE %s   groups=%,d  events=%,d  rollups=%,d  observations=%,d  alerts=%,d  size=%s"
                             .formatted(
                                     stage.label(),
@@ -117,21 +125,20 @@ class ScaleExperimentTests {
                                     seeder.count("detector_observations"),
                                     seeder.count("alerts"),
                                     seeder.totalSize()));
-            report.add("-".repeat(96));
-            report.add("  %-34s %-46s %8s %9s".formatted("QUERY", "PLAN", "ms", "buffers"));
+            say.accept("-".repeat(96));
+            say.accept("  %-34s %-46s %8s %9s".formatted("QUERY", "PLAN", "ms", "buffers"));
 
             for (Map.Entry<String, String> query : queries().entrySet()) {
-                report.add(explain(query.getKey(), query.getValue()));
+                say.accept(explain(query.getKey(), query.getValue()));
             }
 
-            report.add("  %-34s %-46s %8s %9s".formatted("-- write path --", "", "", ""));
-            report.add(timedBatch());
-            report.add(timedSweep());
+            say.accept("  %-34s %-46s %8s %9s".formatted("-- write path --", "", "", ""));
+            say.accept(timedBatch());
+            say.accept(timedSweep());
         }
 
-        report.add("");
-        report.add("=".repeat(96));
-        report.forEach(System.out::println);
+        say.accept("");
+        say.accept("=".repeat(96));
 
         // The experiment is a measurement, not a threshold: the numbers go in the README
         // and a regression is judged by reading them. The one thing asserted is that it
@@ -225,7 +232,7 @@ class ScaleExperimentTests {
                 """
                 select g.id, g.title, similarity(g.title, 'could not reserve stock for cart') as score
                   from event_groups g
-                 where g.id <> 1 and g.title %% 'could not reserve stock for cart'
+                 where g.id <> 1 and g.title % 'could not reserve stock for cart'
                  order by score desc limit 5
                 """);
 
