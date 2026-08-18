@@ -202,7 +202,7 @@ class ScaleExperimentTests {
                  -- with OFFSET inside the measured statement would charge this query for a
                  -- scan the real one never does, and the point of keyset paging is that it
                  -- does not scan to reach page N.
-                 where (g.last_seen, g.id) < (timestamptz %s, %d)
+                 where (g.last_seen, g.id) < (timestamptz '%s', %d)
                  order by g.last_seen desc, g.id desc
                  limit 26
                 """.formatted(cursorTs, cursorId));
