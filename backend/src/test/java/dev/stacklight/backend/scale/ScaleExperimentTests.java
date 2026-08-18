@@ -128,22 +128,29 @@ class ScaleExperimentTests {
             say.accept("-".repeat(96));
             say.accept("  %-34s %-46s %8s %9s".formatted("QUERY", "PLAN", "ms", "buffers"));
 
-            // Page eighty, near the far end at every stage.
+            // Page eighty, near the far end at every stage. Selected raw and formatted in
+            // Java: a to_char mask carrying HH24:MI:SS hands the named-parameter parser
+            // three colons it reads as placeholders, which is the same collision the group
+            // list already documents for casts.
             Map<String, Object> cursor =
                     jdbc.sql(
                                     """
-                                    select to_char(last_seen at time zone utc,
-                                                   YYYY-MM-DDTHH24:MI:SS.US) as ts, id
+                                    select last_seen, id
                                       from event_groups
                                      order by last_seen desc, id desc
-                                     offset least(2000, greatest(0, (select count(*) - 1 from event_groups)))
+                                     offset least(2000, greatest(0,
+                                            (select count(*) - 1 from event_groups)))
                                      limit 1
                                     """)
                             .query()
                             .singleRow();
 
             for (Map.Entry<String, String> query :
-                    queries((String) cursor.get("ts"), ((Number) cursor.get("id")).longValue())
+                    queries(
+                                    ((java.sql.Timestamp) cursor.get("last_seen"))
+                                            .toInstant()
+                                            .toString(),
+                                    ((Number) cursor.get("id")).longValue())
                             .entrySet()) {
                 say.accept(explain(query.getKey(), query.getValue()));
             }
