@@ -1,0 +1,58 @@
+name: scale
+
+# The measurement this project had not taken about itself.
+#
+# Everything else here is measured -- nine cold starts, a 111-hour detector scorecard,
+# alert latency stated with its worst case -- and the data layer was not. Production holds
+# fifteen groups and a couple of thousand events, and at that size PostgreSQL is right to
+# read every table end to end, so the sequential scans on event_groups say nothing about
+# whether the indexes are the right ones.
+#
+# ## Why this is not a job in ci.yml
+#
+# It loads a million rollup rows and takes minutes. CI runs on every push and finishes in
+# under a minute, and a suite that slows down is a suite people stop waiting for. The tag
+# keeps it out of `mvn verify`; this file is how it gets run on purpose.
+#
+# ## Why it is not run against the live database
+#
+# Neon's free plan has a 512 MB ceiling that suspends the project rather than billing for
+# an overage, and deleting rows does not hand the space back promptly. Loading two hundred
+# thousand events into it and trusting the cleanup is betting a live deployment on a
+# tidy-up. A container costs nothing and is discarded.
+#
+# What transfers from a container to Neon is the plan: same planner, same statistics, same
+# indexes. What does not transfer is the clock, because Neon's storage is disaggregated and
+# its timings are its own. The report says so, and so does the README.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scale:
+    name: scale
+    runs-on: ubuntu-latest
+    # Generous, but bounded: a run that hangs should not hold a runner for six hours.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run the experiment
+        working-directory: backend
+        # -Dgroups=scale selects the tag that `mvn verify` excludes. The report goes to
+        # stdout, which is the point: it is read, not asserted on.
+        run: ./mvnw -B --no-transfer-progress test -Dgroups=scale -Dtest=ScaleExperimentTests
+
+      - name: Say where the numbers are
+        if: always()
+        run: |
+          echo "The table is in the step above, one block per stage." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Container timings, not Neon timings. Plans transfer; the clock does not." >> "$GITHUB_STEP_SUMMARY"

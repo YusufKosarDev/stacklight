@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-348-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-349-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -2085,13 +2085,13 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **205** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Backend | **206** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **56** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **30** | `node --test` |
 | Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
 | Dashboard, rendered | **23** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **348** | the number on the badge at the top |
+| **Total** | **349** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them
