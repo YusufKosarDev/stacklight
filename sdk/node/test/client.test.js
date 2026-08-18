@@ -27,14 +27,14 @@ function fakeTransport() {
         await new Promise((r) => setTimeout(r, Math.min(state.delayMs, timeoutMs)));
       }
       if (state.rejectEverything) {
-        return { delivered: false, retryable: false, detail: "401" };
+        return { delivered: false, retryable: false, detail: "401", accepted: 0, discarded: [], pending: batch };
       }
       if (state.failuresRemaining > 0) {
         state.failuresRemaining -= 1;
-        return { delivered: false, retryable: true, detail: "simulated" };
+        return { delivered: false, retryable: true, detail: "simulated", accepted: 0, discarded: [], pending: batch };
       }
       state.delivered.push(...batch);
-      return { delivered: true, retryable: false, detail: null };
+      return { delivered: true, retryable: false, detail: null, accepted: batch.length, discarded: [], pending: [] };
     },
   };
 }
@@ -43,27 +43,40 @@ function fakeTransport() {
  * Accepts events one at a time, the way the wire format really works, and stops after a
  * chosen number. Records everything it was handed, so a redelivery is visible.
  */
-function perEventTransport() {
+/**
+ * A collector that takes the first few events of a batch and reports on the rest.
+ *
+ * The batch endpoint answers 202 even when some events did not land, so this models the
+ * shape that matters: one request, and a per-event verdict the dispatcher has to sort.
+ */
+function partialTransport() {
   const state = { handed: [], accepted: [], acceptsPerAttempt: Infinity, retryable: true };
 
   return {
     state,
     async send(batch) {
-      let delivered = 0;
-      for (const event of batch) {
+      const discarded = [];
+      const pending = [];
+
+      batch.forEach((event, index) => {
         state.handed.push(event.eventId);
-        if (delivered >= state.acceptsPerAttempt) {
-          return {
-            delivered: false,
-            retryable: state.retryable,
-            detail: state.retryable ? "collector stopped answering" : "401",
-            deliveredBeforeFailure: delivered,
-          };
+        if (index < state.acceptsPerAttempt) {
+          state.accepted.push(event.eventId);
+        } else if (state.retryable) {
+          pending.push(event);
+        } else {
+          discarded.push({ event, reason: "service must not be blank" });
         }
-        state.accepted.push(event.eventId);
-        delivered += 1;
-      }
-      return { delivered: true, retryable: false, detail: null, deliveredBeforeFailure: 0 };
+      });
+
+      return {
+        delivered: true,
+        retryable: false,
+        detail: null,
+        accepted: state.accepted.length,
+        discarded,
+        pending,
+      };
     },
   };
 }
@@ -144,18 +157,19 @@ const oneAttempt = (transport, count) => {
   return { queue, dispatcher, batch: queue.drain(count) };
 };
 
-test("a batch that stops halfway only requeues the part that did not arrive", async () => {
-  // One event per request means a batch can stop in the middle. Treating that as a total
-  // failure put the accepted half back too, to be told by the collector's duplicate check
-  // that it already had them -- a round trip each to learn nothing, and against a 429 the
-  // retry feeds the very problem it is reacting to.
-  const transport = perEventTransport();
+test("a partly accepted batch requeues only what is still owed", async () => {
+  // The collector answers 202 and says per event what became of it, so "the request
+  // worked" and "every event landed" are separate answers. What it took is counted; only
+  // the rest goes back, and it goes back at the front so order survives.
+  const transport = partialTransport();
   transport.state.acceptsPerAttempt = 3;
   const { queue, dispatcher, batch } = oneAttempt(transport, 8);
 
   const finished = await dispatcher.deliver(batch, 1000);
 
-  assert.equal(finished, false, "a partial failure is still worth another attempt");
+  // True, and this is the deliberate part: the request succeeded, so backing off would
+  // punish a batch that mostly worked. The remainder is queued for the next pass instead.
+  assert.equal(finished, true, "a request that was answered is not a failed attempt");
   assert.deepEqual(transport.state.accepted, ["e0", "e1", "e2"]);
   assert.equal(dispatcher.sentCount, 3, "what the collector took counts as sent");
   assert.equal(queue.size, 5, "only what it did not take goes back");
@@ -166,18 +180,21 @@ test("a batch that stops halfway only requeues the part that did not arrive", as
   );
 });
 
-test("a rejection part way through only discards what was still owed", async () => {
-  const transport = perEventTransport();
+test("events the collector refused outright are dropped, not retried for ever", async () => {
+  // Per-event rejections: something about those four events is wrong and no amount of
+  // sending will change it. Dropping them is what keeps a queue from filling with events
+  // that can never leave it.
+  const transport = partialTransport();
   transport.state.acceptsPerAttempt = 2;
   transport.state.retryable = false;
   const { queue, dispatcher, batch } = oneAttempt(transport, 6);
 
   const finished = await dispatcher.deliver(batch, 1000);
 
-  assert.equal(finished, true, "a rejection is final");
+  assert.equal(finished, true, "there is nothing to come back for");
   assert.equal(dispatcher.sentCount, 2, "the two that landed are not counted as lost");
-  assert.equal(dispatcher.givenUpCount, 4, "only the four that did not land are given up");
-  assert.equal(queue.size, 0);
+  assert.equal(dispatcher.givenUpCount, 4, "only the four it refused are given up");
+  assert.equal(queue.size, 0, "and none of them goes back on the queue");
 });
 
 test("a full queue drops the oldest and says so", async () => {

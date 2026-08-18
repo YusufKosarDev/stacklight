@@ -37,47 +37,53 @@ class StacklightClientTests {
                 }
             }
             if (rejectEverything) {
-                return Result.reject("401");
+                return Result.reject("401", batch);
             }
             if (failuresRemaining > 0) {
                 failuresRemaining--;
-                return Result.retry("simulated");
+                return Result.retry("simulated", batch);
             }
             delivered.addAll(batch);
             arrived.countDown();
-            return Result.ok();
+            return Result.ok(batch.size());
         }
     }
 
     /**
-     * Accepts events one at a time, the way the wire format really works, and stops after
-     * a chosen number. Records everything it was handed, so a redelivery is visible.
+     * A collector that takes the first few events of a batch and reports on the rest.
+     *
+     * <p>The batch endpoint answers 202 even when some events did not land, so this models
+     * the shape that matters: one request, and a per-event verdict the dispatcher sorts.
      */
-    private static final class PerEventTransport implements Transport {
+    private static final class PartialTransport implements Transport {
         final List<String> handed = Collections.synchronizedList(new ArrayList<>());
         final List<String> accepted = Collections.synchronizedList(new ArrayList<>());
-        /** How many events this transport will take before failing, per attempt. */
+        /** How many events this transport will take before refusing the rest. */
         volatile int acceptsPerAttempt = Integer.MAX_VALUE;
         volatile boolean retryable = true;
         volatile CountDownLatch arrived = new CountDownLatch(0);
 
         @Override
         public Result send(List<StacklightEvent> batch, java.time.Duration timeout) {
-            int delivered = 0;
-            for (StacklightEvent event : batch) {
+            List<Discarded> discarded = new ArrayList<>();
+            List<StacklightEvent> pending = new ArrayList<>();
+            int taken = 0;
+
+            for (int i = 0; i < batch.size(); i++) {
+                StacklightEvent event = batch.get(i);
                 handed.add(event.eventId());
-                if (delivered >= acceptsPerAttempt) {
-                    Result outcome =
-                            retryable
-                                    ? Result.retry("collector stopped answering")
-                                    : Result.reject("401");
-                    return outcome.after(delivered);
+                if (i < acceptsPerAttempt) {
+                    accepted.add(event.eventId());
+                    taken++;
+                } else if (retryable) {
+                    pending.add(event);
+                } else {
+                    discarded.add(new Discarded(event, "service must not be blank"));
                 }
-                accepted.add(event.eventId());
-                delivered++;
             }
+
             arrived.countDown();
-            return Result.ok();
+            return Result.ok(taken, discarded, pending);
         }
     }
 
@@ -158,18 +164,19 @@ class StacklightClientTests {
     }
 
     @Test
-    void aBatchThatStopsHalfwayOnlyRequeuesThePartThatDidNotArrive() {
-        // One event per request means a batch can stop in the middle. Treating that as a
-        // total failure put the accepted half back too, to be told by the collector's
-        // duplicate check that it already had them -- a round trip each to learn nothing,
-        // and against a 429 the retry feeds the very problem it is reacting to.
-        PerEventTransport transport = new PerEventTransport();
+    void aPartlyAcceptedBatchRequeuesOnlyWhatIsStillOwed() {
+        // The collector answers 202 and says per event what became of it, so "the request
+        // worked" and "every event landed" are separate answers. What it took is counted;
+        // only the rest goes back, and it goes back at the front so order survives.
+        PartialTransport transport = new PartialTransport();
         transport.acceptsPerAttempt = 3;
         Attempt attempt = oneAttempt(transport, 8);
 
         boolean finished = attempt.dispatcher().deliver(attempt.batch(), Duration.ofSeconds(1));
 
-        assertThat(finished).isFalse();
+        // True, and this is the deliberate part: the request succeeded, so backing off
+        // would punish a batch that mostly worked. The remainder waits for the next pass.
+        assertThat(finished).isTrue();
         assertThat(transport.accepted).hasSize(3);
         assertThat(attempt.dispatcher().sent()).isEqualTo(3);
         assertThat(attempt.queue().size()).isEqualTo(5);
@@ -180,8 +187,10 @@ class StacklightClientTests {
     }
 
     @Test
-    void aRejectionPartWayThroughOnlyDiscardsWhatWasStillOwed() {
-        PerEventTransport transport = new PerEventTransport();
+    void eventsTheCollectorRefusedOutrightAreDroppedNotRetriedForEver() {
+        // Something about those four is wrong and no amount of sending will change it.
+        // Dropping them is what keeps a queue from filling with events that cannot leave.
+        PartialTransport transport = new PartialTransport();
         transport.acceptsPerAttempt = 2;
         transport.retryable = false;
         Attempt attempt = oneAttempt(transport, 6);
@@ -333,7 +342,7 @@ class StacklightClientTests {
         Dispatcher dispatcher =
                 new Dispatcher(
                         new EventQueue(10),
-                        (batch, timeout) -> Transport.Result.ok(),
+                        (batch, timeout) -> Transport.Result.ok(batch.size()),
                         options().retryBaseDelay(Duration.ofSeconds(1)).retryMaxDelay(Duration.ofSeconds(30)),
                         new Logger(false));
 

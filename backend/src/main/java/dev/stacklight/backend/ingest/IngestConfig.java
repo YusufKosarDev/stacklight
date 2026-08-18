@@ -55,4 +55,18 @@ public class IngestConfig {
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);
         return registration;
     }
+
+    /**
+     * After the key check rather than before it: refusing an oversized body is cheap, but
+     * telling an unauthenticated caller how large a body this service accepts is free
+     * information about it. An unkeyed request gets its 401 and learns nothing else.
+     */
+    @Bean
+    FilterRegistrationBean<RequestSizeFilter> requestSizeFilter() {
+        FilterRegistrationBean<RequestSizeFilter> registration =
+                new FilterRegistrationBean<>(new RequestSizeFilter());
+        registration.addUrlPatterns("/api/*");
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);
+        return registration;
+    }
 }

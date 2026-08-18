@@ -82,8 +82,49 @@ public class IngestService {
         }
     }
 
+    /** One event, with the follow-up work queued for the moment it commits. */
     @Transactional
     public Result ingest(UUID eventId, IngestRequest request) {
+        Result result = store(eventId, request);
+        afterCommit(() -> followUp(1));
+        return result;
+    }
+
+    /**
+     * One event out of a batch, leaving the follow-up to the caller.
+     *
+     * <p>A batch runs {@link #followUp(int)} once when it is done rather than once per
+     * event. The three passes it triggers are all amortised or guarded -- retention counts
+     * events and sweeps every two hundred, scoring has a time gate, delivery has a flag --
+     * so running them twenty times where once would do is not incorrect, only wasteful. It
+     * is also twenty chances to do the same nothing.
+     *
+     * <p>Separate methods rather than a boolean, because {@code @Transactional} is applied
+     * by a proxy: a method calling its own annotated sibling would bypass it entirely and
+     * silently run outside a transaction. The batch service is a separate bean for the same
+     * reason -- every call it makes into this one goes through the proxy and gets a
+     * transaction of its own.
+     */
+    @Transactional
+    public Result ingestWithoutFollowUp(UUID eventId, IngestRequest request) {
+        return store(eventId, request);
+    }
+
+    /**
+     * The work that must not be able to reject an event: a bounded retention pass, a
+     * scoring pass, and a request to drain the alert outbox.
+     *
+     * @param events how many events this call is accounting for, so retention's every-N
+     *     amortisation counts actual events rather than calls -- a batch of twenty that
+     *     incremented the counter once would sweep twenty times too rarely
+     */
+    public void followUp(int events) {
+        retentionService.onEventsStored(events);
+        selfScoringService.scoreIfDue();
+        alertDispatcher.requestDrain();
+    }
+
+    private Result store(UUID eventId, IngestRequest request) {
         long startedAt = System.nanoTime();
 
         long groupingStartedAt = System.nanoTime();
@@ -139,19 +180,9 @@ public class IngestService {
         // from repeating once per event through the burst that triggered it.
         detectionService.evaluateNewGroup(filed.groupId(), filed.ageHours(), filed.eventCount());
 
-        // Everything below runs after the event is safely committed, never as part of
-        // it: a slow sweep, a scoring pass or an unreachable mail server must not be
-        // able to reject an event.
-        afterCommit(
-                () -> {
-                    retentionService.onEventStored();
-                    selfScoringService.scoreIfDue();
-                    alertDispatcher.requestDrain();
-                });
-
         // Recorded after the work and before the return, so the timer covers the whole
-        // transaction body. The drains queued above are deliberately outside it: they run
-        // after the commit and are not what a caller waited for.
+        // transaction body. The follow-up is deliberately outside it: it runs after the
+        // commit and is not what a caller waited for.
         metrics.ingested(withinCap ? "stored" : "sampled", System.nanoTime() - startedAt);
 
         return new Result(true, fingerprint, filed.groupId(), !withinCap, filed.broughtItBack());

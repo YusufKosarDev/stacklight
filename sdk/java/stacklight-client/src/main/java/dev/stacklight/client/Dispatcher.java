@@ -83,22 +83,34 @@ final class Dispatcher {
     boolean deliver(List<StacklightEvent> batch, java.time.Duration timeout) {
         Transport.Result result = transport.send(batch, timeout);
 
-        if (result.delivered()) {
-            sent.addAndGet(batch.size());
-            return true;
+        sent.addAndGet(result.accepted());
+
+        // Refused for a reason another attempt cannot change. Counted as given up and
+        // dropped, because the alternative is a queue that never empties and a log line
+        // every backoff for ever.
+        if (!result.discarded().isEmpty()) {
+            givenUp.addAndGet(result.discarded().size());
+            logger.debug(
+                    () ->
+                            "discarding "
+                                    + result.discarded().size()
+                                    + " events: "
+                                    + result.discarded().get(0).reason());
         }
 
-        // A batch is one request per event, so it can stop in the middle. What the
-        // collector already took is delivered and counted; only the rest is still owed.
-        // Sending the accepted part again would cost a round trip each to be told by the
-        // collector's duplicate check that it already had them, and against a 429 it would
-        // feed the very problem it is reacting to.
-        int accepted = result.deliveredBeforeFailure();
-        if (accepted > 0) {
-            sent.addAndGet(accepted);
+        List<StacklightEvent> pending = new ArrayList<>(result.pending());
+
+        if (result.delivered()) {
+            // The request was answered. Anything still pending is a per-event problem the
+            // collector called retryable, so it goes back on the queue -- but this is not a
+            // failed attempt: backing off would punish a batch that mostly worked.
+            if (!pending.isEmpty()) {
+                queue.requeueFront(pending);
+                logger.debug(
+                        () -> "requeued " + pending.size() + " events the collector could not take yet");
+            }
+            return true;
         }
-        List<StacklightEvent> remainder =
-                new ArrayList<>(batch.subList(accepted, batch.size()));
 
         failedAttempts.incrementAndGet();
         lastError.set(result.detail());
@@ -106,13 +118,13 @@ final class Dispatcher {
         if (!result.retryable()) {
             // Retrying will not change the answer, so what is left is discarded rather
             // than kept for ever in front of events that could still be delivered.
-            givenUp.addAndGet(remainder.size());
-            logger.debug(() -> "discarding " + remainder.size() + " events: " + result.detail());
+            givenUp.addAndGet(pending.size());
+            logger.debug(() -> "discarding " + pending.size() + " events: " + result.detail());
             return true;
         }
 
-        queue.requeueFront(remainder);
-        logger.debug(() -> "requeued " + remainder.size() + " events: " + result.detail());
+        queue.requeueFront(pending);
+        logger.debug(() -> "requeued " + pending.size() + " events: " + result.detail());
         return false;
     }
 
