@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-320-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-348-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -63,6 +63,7 @@ silently would have made the clip an illustration rather than evidence.
   - [The console that does it, and where it had to live](#the-console-that-does-it-and-where-it-had-to-live)
 - [The interface](#the-interface) — a dashboard that ships no JavaScript of its own
 - [The clients](#the-clients) — Java and Node, built around a collector that takes a hundred seconds to wake
+  - [A batch is one request, and the transaction is still per event](#a-batch-is-one-request-and-the-transaction-is-still-per-event)
 - [Connection strategy](#connection-strategy) — why the two halves talk to the same database differently
 - [Observability, and the collector it does not have](#observability-and-the-collector-it-does-not-have) — built, guarded, and honest about what nothing reads
 - [API](#api) — four endpoints
@@ -1013,6 +1014,72 @@ earliest copy costs a count and a timestamp. Dropping the *newest* instead would
 mean that during a sustained burst nothing recent ever gets through, which is
 worse in the case that actually matters.
 
+### A batch is one request, and the transaction is still per event
+
+For six steps the wire format was one event per request, and both clients said so
+in their own source: *"a batch is a loop rather than one call."* Twenty queued
+events meant twenty round trips, twenty connections and — less visibly — twenty
+follow-up passes on the collector, against a service that takes a hundred seconds
+to wake. `POST /api/events/batch` takes the whole drain at once.
+
+**One transaction per event, not one per batch.** This is the decision worth
+explaining, because the other one is easier to write.
+
+A batch here is a client emptying its queue, not a unit of work. The events in it
+are independent failure reports, possibly from different moments and different
+code paths in the same application, and nothing about them is jointly meaningful.
+Wrapping them in one transaction would invent a coupling the domain does not
+have — and then charge for it:
+
+| A database error on the 87th of 100 | One transaction | Per event |
+|---|---|---|
+| Events lost | the 86 that had succeeded | none |
+| What the client re-sends | all 100 | the remainder |
+| Work repeated on the collector | 86 events, twice | none |
+
+Re-sending is safe either way, because every event carries its own id and the
+insert is `on conflict do nothing`. The difference is how much work is thrown
+away to find that out.
+
+**What this does not buy, stated plainly: the number of transactions is
+unchanged.** Twenty events are twenty transactions before and after. What
+collapses is twenty round trips into one, twenty connection acquisitions into
+one, and twenty follow-up passes into one — the last of these being the least
+visible and the most real, since every commit used to trigger a retention check,
+a scoring check and a drain request.
+
+**Validation is per event.** One message that outgrew its limit does not discard
+the nineteen around it. That also makes the answer actionable rather than
+narrative: a validation failure cannot be fixed by retrying and is reported as not
+retryable, while anything that went wrong reaching the database is. A client
+requeues what is retryable and drops what is not, without reading prose.
+
+**202 with a per-event result, not 207.** The request itself succeeded — it
+parsed, it was authorised, it was processed — and what became of each event is
+data rather than transport status. 207 comes from WebDAV, is handled poorly by
+most clients, and would carry nothing the body does not already say.
+
+**A hundred events per batch, and a size limit before that.** Both clients default
+to twenty and cap their queues at 512, so a hundred is five times what either
+sends. The cap is a validation and therefore runs after the body has been read, so
+a declared length over 4 MB is refused before anything is parsed — the cheaper
+guard, running first.
+
+**`deliveredBeforeFailure` is gone from both clients.** It existed to stop a
+partial failure being treated as a total one: a batch was twenty requests that
+could stop at the seventh, and re-sending the first six would spend a round trip
+each to be told by the duplicate check that they had already arrived. A batch is
+one request now. Either it happened and the collector said what became of every
+event, or it did not and the whole batch is owed again at the cost of one round
+trip rather than twenty.
+
+The Java client reads that receipt without a JSON library, because
+[having no dependencies](#what-both-clients-do) is a property worth more than the
+eighty lines it costs. The reader is deliberately narrow — it walks one array and
+reads two fields — and it is tested against the hazard that matters: error
+messages the collector copied from somewhere else, carrying the same braces,
+brackets and quoted keys the scan is looking for.
+
 ### Stack traces are sent exactly as the runtime printed them
 
 The Java client sends `printStackTrace` output; the Node client sends
@@ -1287,6 +1354,18 @@ retrying a delivery it already made cannot inflate it:
 ```json
 { "eventId": "3f1c9d2e-...", "stored": true,
   "fingerprint": "b2b9c15ea9557bba93353505c471e919", "groupId": 1 }
+```
+
+`POST /api/events/batch` — the same event shape, as an array of up to 100. Answers 202
+with a result per event; a bad one is reported rather than taking the batch down with
+it. Same key, same header. The reasoning is in
+[A batch is one request](#a-batch-is-one-request-and-the-transaction-is-still-per-event).
+
+```json
+{ "accepted": 20, "stored": 18, "duplicates": 1, "failed": 1,
+  "results": [ { "eventId": "3f1c9d2e-...", "stored": true, "fingerprint": "b2b9...",
+                 "groupId": 1, "sampled": false, "regressed": false,
+                 "error": null, "retryable": false } ] }
 ```
 
 `POST /api/sweep` — the work that has to happen when nothing is happening: the
@@ -2006,13 +2085,13 @@ what keeps the read path honest.
 
 | Suite | Count | Runner |
 |---|---|---|
-| Backend | **192** | JUnit, real PostgreSQL 17 via Testcontainers |
-| Java SDK | **45** | JUnit, plus an HTTP server from the JDK |
-| Node SDK | **26** | `node --test` |
+| Backend | **205** | JUnit, real PostgreSQL 17 via Testcontainers |
+| Java SDK | **56** | JUnit, plus an HTTP server from the JDK |
+| Node SDK | **30** | `node --test` |
 | Dashboard, pure logic | **16** | `node --test` on TypeScript, no runner installed |
 | Dashboard, rendered | **23** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **320** | the number on the badge at the top |
+| **Total** | **348** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them

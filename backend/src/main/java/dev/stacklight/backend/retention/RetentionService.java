@@ -74,7 +74,21 @@ public class RetentionService {
      * passed since the last one, and does nothing otherwise.
      */
     public void onEventStored() {
-        int count = eventsSinceSweep.incrementAndGet();
+        onEventsStored(1);
+    }
+
+    /**
+     * Same trigger, told how many events it is accounting for.
+     *
+     * <p>A batch commits each event in its own transaction and then reports the whole
+     * batch here once. Counting that as one event would make the every-N sweep fire in
+     * proportion to requests rather than to rows, which is the opposite of what it is
+     * amortising: storage grows with events, so the counter has to as well.
+     *
+     * @param events number of events stored since the last call, at least one
+     */
+    public void onEventsStored(int events) {
+        int count = eventsSinceSweep.addAndGet(Math.max(1, events));
         boolean byVolume = count >= properties.sweepEveryEvents();
         boolean byAge =
                 Duration.between(lastSweep.get(), Instant.now())

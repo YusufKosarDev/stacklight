@@ -61,33 +61,41 @@ class Dispatcher {
       result = { delivered: false, retryable: true, detail: String(error) };
     }
 
-    if (result.delivered) {
-      this.sentCount += batch.length;
-      return true;
+    this.sentCount += result.accepted ?? 0;
+
+    // Refused for a reason retrying cannot change -- a field the collector would not
+    // accept, most likely. Counted as given up and dropped, because the alternative is a
+    // queue that never empties and a log line every backoff for ever.
+    const discarded = result.discarded ?? [];
+    if (discarded.length > 0) {
+      this.givenUpCount += discarded.length;
+      this.log(`discarding ${discarded.length} events: ${discarded[0].reason}`);
     }
 
-    // A batch is one request per event, so it can stop in the middle. What the collector
-    // already took is delivered and counted; only the rest is still owed. Sending the
-    // accepted part again would cost a round trip each to be told by the collector's
-    // duplicate check that it already had them, and against a 429 it would feed the very
-    // problem it is reacting to.
-    const accepted = result.deliveredBeforeFailure ?? 0;
-    if (accepted > 0) {
-      this.sentCount += accepted;
+    const pending = result.pending ?? [];
+
+    if (result.delivered) {
+      // The request was answered. Anything still pending is a per-event problem the
+      // collector called retryable, so it goes back on the queue -- but this is not a
+      // failed attempt: backing off would punish a batch that mostly worked.
+      if (pending.length > 0) {
+        this.queue.requeueFront(pending);
+        this.log(`requeued ${pending.length} events the collector could not take yet`);
+      }
+      return true;
     }
-    const remainder = batch.slice(accepted);
 
     this.failedAttempts += 1;
     this.lastError = result.detail;
 
     if (!result.retryable) {
-      this.givenUpCount += remainder.length;
-      this.log(`discarding ${remainder.length} events: ${result.detail}`);
+      this.givenUpCount += pending.length;
+      this.log(`discarding ${pending.length} events: ${result.detail}`);
       return true;
     }
 
-    this.queue.requeueFront(remainder);
-    this.log(`requeued ${remainder.length} events: ${result.detail}`);
+    this.queue.requeueFront(pending);
+    this.log(`requeued ${pending.length} events: ${result.detail}`);
     return false;
   }
 

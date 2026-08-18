@@ -1,6 +1,7 @@
 package dev.stacklight.backend.ingest;
 
 import jakarta.validation.Valid;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,9 +18,11 @@ public class EventController {
     private static final Logger log = LoggerFactory.getLogger(EventController.class);
 
     private final IngestService ingestService;
+    private final BatchIngestService batchIngestService;
 
-    EventController(IngestService ingestService) {
+    EventController(IngestService ingestService, BatchIngestService batchIngestService) {
         this.ingestService = ingestService;
+        this.batchIngestService = batchIngestService;
     }
 
     @PostMapping
@@ -47,6 +50,42 @@ public class EventController {
                                 result.groupId(),
                                 result.sampled(),
                                 result.regressed()));
+    }
+
+    /**
+     * A queue drain in one request.
+     *
+     * <p>202 with a per-event result rather than 207. The request itself succeeded -- it
+     * parsed, it was authorised, it was processed -- and what happened to each event is
+     * data rather than transport status. 207 comes from WebDAV, is handled poorly by most
+     * clients, and would carry nothing the body does not already say. The single-event
+     * endpoint answers 202 as well, so a client reads the same code from both.
+     *
+     * <p>The whole request is rejected only when the envelope is wrong: no events, or more
+     * than {@link BatchIngestService#MAX_EVENTS}. Those are client mistakes that retrying
+     * cannot fix, and failing loudly is more useful than half-accepting.
+     */
+    @PostMapping("/batch")
+    public ResponseEntity<BatchIngestService.BatchResult> ingestBatch(
+            @RequestBody List<IngestRequest> events) {
+
+        if (events == null || events.isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+        if (events.size() > BatchIngestService.MAX_EVENTS) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        BatchIngestService.BatchResult result = batchIngestService.ingestAll(events);
+
+        log.info(
+                "ingest batch accepted={} stored={} duplicates={} failed={}",
+                result.accepted(),
+                result.stored(),
+                result.duplicates(),
+                result.failed());
+
+        return ResponseEntity.accepted().body(result);
     }
 
     /**
