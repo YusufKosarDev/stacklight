@@ -220,7 +220,8 @@ class ScaleExperimentTests {
                   from generate_series(date_trunc('day', now()) - make_interval(days => 6),
                                        date_trunc('day', now()), interval '1 day') as bucket
                   left join event_rollups r
-                         on date_trunc('day', r.bucket_start) = bucket
+                         on r.bucket_start >= bucket
+                        and r.bucket_start < bucket + interval '1 day'
                         and r.group_id in (select g.id from event_groups g)
                  group by bucket order by bucket
                 """);
