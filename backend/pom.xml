@@ -28,6 +28,9 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
+		<!-- Overridden to "none" by the scale workflow, which is the only way to lift
+		     the exclusion; see the surefire plugin below. -->
+		<surefire.excluded.groups>scale</surefire.excluded.groups>
 		<!-- Spring Boot 4 no longer manages the Testcontainers version, so the BOM
 		     is imported explicitly below. -->
 		<testcontainers.version>2.0.5</testcontainers.version>
@@ -143,14 +146,19 @@
 			<!--
 			  The scale experiment loads a million rows and takes minutes. CI takes
 			  seconds and runs on every push, so it is excluded by tag rather than by
-			  being kept somewhere it would rot. Run it with -Dgroups=scale, or through
-			  the workflow that exists for it.
+			  being kept somewhere it would rot.
+
+			  The exclusion is a property rather than a literal because an exclusion
+			  cannot be lifted by asking for the tag: -Dgroups=scale selects the tag and
+			  excludedGroups still removes it, so the run reports "Tests run: 0" and
+			  passes. Overriding the property is the only way to turn it off, which is
+			  what the scale workflow does.
 			-->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<configuration>
-					<excludedGroups>scale</excludedGroups>
+					<excludedGroups>${surefire.excluded.groups}</excludedGroups>
 				</configuration>
 			</plugin>
 		</plugins>

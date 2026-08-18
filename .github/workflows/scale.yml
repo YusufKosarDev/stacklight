@@ -46,13 +46,33 @@ jobs:
 
       - name: Run the experiment
         working-directory: backend
-        # -Dgroups=scale selects the tag that `mvn verify` excludes. The report goes to
-        # stdout, which is the point: it is read, not asserted on.
-        run: ./mvnw -B --no-transfer-progress test -Dgroups=scale -Dtest=ScaleExperimentTests
+        # Both halves are needed. -Dgroups=scale selects the tag; overriding the excluded
+        # property is what stops the pom removing it again. Asking for the tag alone
+        # produces "Tests run: 0" and a green build, which is how the first run of this
+        # workflow measured nothing and reported success.
+        run: |
+          set -o pipefail
+          ./mvnw -B --no-transfer-progress test \
+            -Dgroups=scale \
+            -Dsurefire.excluded.groups=none \
+            -Dtest=ScaleExperimentTests | tee /tmp/scale-output.txt
+
+      - name: Refuse to call an empty run a measurement
+        run: |
+          # A run that measured nothing must not look like a run that measured nothing
+          # wrong. The report prints one STAGE line per step, so their absence is the
+          # signal -- and "Tests run: 0" is what it looked like the first time.
+          stages=$(grep -c '^STAGE ' /tmp/scale-output.txt || true)
+          echo "stages recorded: $stages"
+
+          if [ "$stages" -lt 4 ]; then
+            echo "::error::the experiment produced $stages stage reports, expected 4 -- it did not run"
+            exit 1
+          fi
 
       - name: Say where the numbers are
         if: always()
         run: |
-          echo "The table is in the step above, one block per stage." >> "$GITHUB_STEP_SUMMARY"
+          echo "The table is in the run step, one block per stage." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Container timings, not Neon timings. Plans transfer; the clock does not." >> "$GITHUB_STEP_SUMMARY"
