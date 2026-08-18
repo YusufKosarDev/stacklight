@@ -102,7 +102,11 @@ final class ScaleSeeder {
                             group_id, fingerprint, fingerprint_version, platform,
                             exception_type, stacktrace, release)
                         select gen_random_uuid(),
-                               now() - make_interval(mins => (((i::bigint * 3) % 20160)::int)),
+                               now() - make_interval(mins => (((i::bigint * 3) % 20160)::int))
+                                   -- Every fifth event is pushed past the fourteen-day
+                                   -- window, so the retention sweep has something to delete
+                                   -- rather than reporting nought in no time at all.
+                                   - case when i % 5 = 0 then interval '20 days' else interval '0' end,
                                g.service, g.level,
                                g.title,
                                g.id, g.fingerprint, 1, g.platform,

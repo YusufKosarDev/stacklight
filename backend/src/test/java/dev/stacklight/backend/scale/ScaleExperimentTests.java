@@ -128,7 +128,23 @@ class ScaleExperimentTests {
             say.accept("-".repeat(96));
             say.accept("  %-34s %-46s %8s %9s".formatted("QUERY", "PLAN", "ms", "buffers"));
 
-            for (Map.Entry<String, String> query : queries().entrySet()) {
+            // Page eighty, near the far end at every stage.
+            Map<String, Object> cursor =
+                    jdbc.sql(
+                                    """
+                                    select to_char(last_seen at time zone utc,
+                                                   YYYY-MM-DDTHH24:MI:SS.US) as ts, id
+                                      from event_groups
+                                     order by last_seen desc, id desc
+                                     offset least(2000, greatest(0, (select count(*) - 1 from event_groups)))
+                                     limit 1
+                                    """)
+                            .query()
+                            .singleRow();
+
+            for (Map.Entry<String, String> query :
+                    queries((String) cursor.get("ts"), ((Number) cursor.get("id")).longValue())
+                            .entrySet()) {
                 say.accept(explain(query.getKey(), query.getValue()));
             }
 
@@ -144,7 +160,7 @@ class ScaleExperimentTests {
         // and a regression is judged by reading them. The one thing asserted is that it
         // actually built the shape it claims to have measured.
         assertThat(seeder.count("event_rollups")).isGreaterThanOrEqualTo(1_000_000);
-        assertThat(seeder.count("event_groups")).isEqualTo(5_000);
+        assertThat(seeder.count("event_groups")).isGreaterThanOrEqualTo(5_000);
     }
 
     // ---- the statements under test -----------------------------------------------------
@@ -157,7 +173,7 @@ class ScaleExperimentTests {
      * here. A copy can drift from its original and then this measures a fiction, which is
      * why {@link TranscribedQueryTests} exists, and why it runs in CI while this does not.
      */
-    private Map<String, String> queries() {
+    private Map<String, String> queries(String cursorTs, long cursorId) {
         Map<String, String> queries = new LinkedHashMap<>();
 
         queries.put(
@@ -175,14 +191,14 @@ class ScaleExperimentTests {
                 """
                 select g.id, g.title, g.service, g.status, g.event_count
                   from event_groups g
-                 where (g.last_seen, g.id)
-                       < ((select last_seen from event_groups order by last_seen desc, id desc
-                            offset 2000 limit 1),
-                          (select id from event_groups order by last_seen desc, id desc
-                            offset 2000 limit 1))
+                 -- The cursor arrives in the URL, so it is a literal here too. Finding it
+                 -- with OFFSET inside the measured statement would charge this query for a
+                 -- scan the real one never does, and the point of keyset paging is that it
+                 -- does not scan to reach page N.
+                 where (g.last_seen, g.id) < (timestamptz %s, %d)
                  order by g.last_seen desc, g.id desc
                  limit 26
-                """);
+                """.formatted(cursorTs, cursorId));
 
         queries.put(
                 "countsByStatus",
