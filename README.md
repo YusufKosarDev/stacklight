@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-360-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-363-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -1675,6 +1675,28 @@ browser: the read path talks to Postgres and to nothing else.
 it, and `X-Frame-Options: DENY` is there despite `frame-ancestors 'none'` making
 it redundant, for the browsers that only understand the older one.
 
+**And it broke something, which is how the one exception got made.** Loading a
+preview deployment turned up a console error the local test could not have: Vercel
+injects its comment toolbar from `vercel.live`, and the policy refused it. Correctly
+— but the toolbar is how somebody leaves a note on a change before it ships, so
+refusing it costs a real thing on the one deployment where that thing is wanted.
+
+Preview deployments now allow [the hosts Vercel publishes for
+it](https://vercel.com/docs/vercel-toolbar/managing-toolbar). Two details carry
+the weight:
+
+- The condition is `VERCEL_ENV === "preview"`, **not** `!== "production"`. Those
+  read the same at a glance and differ where it matters: the looser one opens the
+  hole on every local `next start` as well, and then the policy anybody tests
+  against is not the policy that ships.
+- It is read once, at build time. Each deployment builds with its own
+  `VERCEL_ENV`, so the production build never emits those hosts — there is no
+  runtime check to get at.
+
+Three tests hold that, and they were checked by loosening the condition to see
+them fail. Nothing became a wildcard: `frame-ancestors`, `object-src`, `base-uri`
+and `form-action` are asserted to be exactly what they were.
+
 ---
 
 ## Measured results
@@ -2324,10 +2346,10 @@ what keeps the read path honest.
 | Backend | **206** | JUnit, real PostgreSQL 17 via Testcontainers |
 | Java SDK | **56** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **30** | `node --test` |
-| Dashboard, pure logic | **19** | `node --test` on TypeScript, no runner installed |
+| Dashboard, pure logic | **22** | `node --test` on TypeScript, no runner installed |
 | Dashboard, rendered | **31** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **360** | the number on the badge at the top |
+| **Total** | **363** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them
