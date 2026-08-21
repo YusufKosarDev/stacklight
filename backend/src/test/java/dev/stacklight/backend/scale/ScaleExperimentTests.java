@@ -213,6 +213,10 @@ class ScaleExperimentTests {
                 select g.status, count(*)::int as n from event_groups g group by g.status
                 """);
 
+        // The day count is a literal here and a bound parameter in the dashboard, which
+        // now takes its window from the URL. Six is what the default seven-day view
+        // passes, so this is that view rather than a shape nobody asks for -- and the
+        // planner sees an integer either way, so the plan is the one being served.
         queries.put(
                 "getOverviewTrend (7d)",
                 """
