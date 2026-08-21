@@ -1,3 +1,8 @@
 .vercel
 .env*
 !.env.example
+
+# Written and re-added by `next dev`. Machine-generated guidance for editor
+# tooling, with nothing in it about this project -- noise in a diff and noise in
+# a file listing.
+AGENTS.md
