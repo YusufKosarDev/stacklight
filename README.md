@@ -2296,6 +2296,17 @@ expands to nine cases at run time, so a grep for `@Test` reports 157 where the
 runner reports 166. The runners are the authority and this table is what they
 said.
 
+**One test in this repository is not in that total**, and it is left out on
+purpose rather than overlooked. `ScaleExperimentTests` is tagged `scale`, which
+excludes it from `mvn verify`: it loads a million rollup rows and takes minutes,
+where the suite above finishes in seconds, and a suite that slows down is one
+people stop waiting for. It is run
+[from a workflow](.github/workflows/scale.yml) when somebody wants the
+measurement, and what it found is in
+[the section above](#the-data-layer-loaded-until-it-complained). The guard that
+keeps its transcribed queries honest is *not* excluded — it needs no database and
+runs on every push with everything else.
+
 ### The dashboard renders in a test now, and it cost nothing to install
 
 This section used to say the dashboard's count was the honest weak spot, because

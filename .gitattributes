@@ -12,3 +12,8 @@ mvnw.cmd    text eol=crlf
 *.jar       binary
 *.png       binary
 *.ico       binary
+# The recordings in docs/media. `* text=auto` already detects these correctly, so
+# naming them changes nothing today -- it states the fact rather than leaving it to
+# a heuristic, which is what the three lines above are for too.
+*.gif       binary
+*.webm      binary
