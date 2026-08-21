@@ -78,6 +78,7 @@ silently would have made the clip an illustration rather than evidence.
   - [The external trigger, once it was wired](#the-external-trigger-once-it-was-wired)
   - [Grouping, on the live deployment](#grouping-on-the-live-deployment)
   - [Pipeline](#pipeline)
+  - [The data layer, loaded until it complained](#the-data-layer-loaded-until-it-complained) — a million rollups, and the index that was not being used
   - [The claim, and the control that backs it](#the-claim-and-the-control-that-backs-it)
   - [What guards the bet when nobody is measuring it](#what-guards-the-bet-when-nobody-is-measuring-it)
   - [The interface, after the redesign](#the-interface-after-the-redesign)
@@ -1523,6 +1524,7 @@ shape.
 | Render, optional | `CONSOLE_API_KEY`, `LOGGING_STRUCTURED_FORMAT_CONSOLE`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM`, `DASHBOARD_URL`, `DETECTOR_ACTIVE`, `GROUPING_ACTIVE_VERSION` |
 | Vercel | `DATABASE_URL` |
 | GitHub secrets | `COLLECTOR_URL`, `INGEST_API_KEY` — the sweep no-ops without them, so a fork does not fail every three hours |
+| GitHub secrets, for the traffic run only | `DATABASE_URL` — the read-only role, so the generator can ask what the current hour already holds and send only the difference. Nothing in that workflow writes to the database; the events go through the collector like any other client's |
 
 Render sets `PORT` itself, and the application reads it.
 
@@ -1739,6 +1741,109 @@ The mechanism was never the doubt; the traffic was, and the traffic came.
 | Ingestion cold start | **95, 104, 104, 104, 104, 105, 106, 114, 116 s**, measured nine times |
 | Ingestion when warm | 0.19–0.53 s |
 | `stacklight_web` privileges | `SELECT` succeeds, `INSERT` denied |
+
+### The data layer, loaded until it complained
+
+Everything else in this file is measured. The data layer was not, and could not
+be: production holds fifteen groups and a couple of thousand events, and at that
+size PostgreSQL is right to read every table end to end. The sequential scans on
+`event_groups` say nothing about whether the indexes are the right ones, because
+at fifteen rows there is no wrong answer.
+
+So the tables were loaded until the planner changed its mind. Four stages, real
+PostgreSQL 17 in a container, [run from a workflow](.github/workflows/scale.yml)
+rather than in CI because it takes minutes and CI takes seconds.
+
+```
+1k     50 groups        2,000 events      1,000 rollups     2,856 kB
+10k    251 groups       9,269 events     10,040 rollups        12 MB
+100k   1,001 groups    48,568 events    100,100 rollups        67 MB
+1M     5,001 groups   198,625 events  1,000,200 rollups       361 MB
+```
+
+**Read the buffer column, not the clock.** Buffers are pages the query actually
+touched; they are the same number on any machine, and they are what an index
+either saves or does not. The milliseconds are container milliseconds on a
+shared runner — they are reported because leaving them out would look like
+hiding something, not because they transfer. Neon's storage is disaggregated and
+its timings are its own.
+
+**Keyset paging holds flat, which is the whole reason it is there.**
+
+| Rollups | `listGroups` deep page | buffers |
+|---|---|---|
+| 1,000 | 0.064 ms | **12** |
+| 10,040 | 0.098 ms | **12** |
+| 100,100 | 0.051 ms | **18** |
+| 1,000,200 | 0.102 ms | **12** |
+
+A thousandfold more data and page eighty costs the same twelve pages. An offset
+would have re-counted every row it skipped, and this table is the difference
+between choosing keyset for a reason and choosing it because an article said to.
+
+**And it found a real one.** The front page's chart moved from a 24-hour window
+to a seven-day one three steps ago, and the predicate came with it:
+`date_trunc('day', r.bucket_start) = bucket`. Wrapping the column in a function
+means `event_rollups_bucket_idx` no longer describes the value being compared,
+so every rollup row in history was read and truncated to find seven days. The
+fix compares against a half-open range instead, so each bucket is a range scan
+over one day.
+
+| Rollups | before | | after | |
+|---|---|---|---|---|
+| | ms | buffers | ms | buffers |
+| 1,000 | 0.865 | 51 | 0.687 | 130 |
+| 10,040 | 6.710 | 401 | 3.225 | 593 |
+| 100,100 | 80.560 | 3,450 | 43.840 | 1,647 |
+| 1,000,200 | 851.411 | **7,232** | 196.691 | **664** |
+
+The before-column grows with the table and the after-column stops growing — 664
+pages at a million rollups, fewer than it touched at a hundred thousand, because
+the range scan reads the days asked for rather than the history behind them.
+
+**At production size this cost nothing and showed nothing.** Fifteen groups, and
+the bad predicate was free. It took loading the table to find it, which is the
+argument for the experiment rather than for the fix.
+
+**It is not finished, and the same table says where to look next.** At a million
+rollups the trend query is still the most expensive read on the page, and it is
+not even the heaviest thing measured:
+
+| Query at 1M rollups | ms | buffers |
+|---|---|---|
+| `getDetectorScorecard` | 62.3 | **16,442** |
+| `getOverviewTrend` (7d, fixed) | 196.7 | 664 |
+| `findSimilarGroups` (pg_trgm) | 38.2 | 526 |
+| `listAlerts` (50) | 0.3 | 619 |
+| `countsByStatus` | 1.1 | 4 |
+
+The scorecard reads twenty-five times the pages the trend does. Nobody had
+looked, because nothing was slow — which is the same reason the trend regression
+survived three steps.
+
+**The write path does not degrade.** Batch ingest was 19.6 ms/event at the first
+stage and 4.7 at the last; the first figure is a cold JVM rather than a small
+table. The retention sweep deletes 5,000 rows in 62 ms at a million rollups.
+
+**What transfers and what does not.** The planner and the statistics are the same
+here as on Neon, so the plan shapes and index choices are the ones production
+would make at these sizes. The clock is not. Nothing above is a claim about how
+fast the live deployment is.
+
+The experiment copies its queries out of `web/lib/queries.ts`, because the
+dashboard reaches Postgres over Neon's HTTP protocol and a container cannot
+answer that. A copy can drift from its original and then the experiment measures
+a query nobody runs while still printing a convincing table, so
+[a guard](backend/src/test/java/dev/stacklight/backend/scale/TranscribedQueryTests.java)
+pins a fragment of each one and fails the build when the two disagree. It runs on
+every push rather than with the experiment: a check that only fires when somebody
+remembers to run it is not a check.
+
+That guard has already been wrong once. It pinned the trend query by a day count
+that also appeared in `listSparklines`, so when the trend query changed the guard
+went on passing — against a query it was never watching. It is pinned now by
+lines that occur once each in the file. A guard matching the wrong thing is worse
+than no guard, because it reports success.
 
 ### The claim, and the control that backs it
 
