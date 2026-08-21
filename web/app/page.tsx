@@ -9,8 +9,15 @@ import {
   type GroupSummary,
   type StorageStatus,
 } from "@/lib/queries";
-import { parseFilters, decodeCursor, toQueryString } from "@/lib/group-filters";
-import type { GroupFilters } from "@/lib/group-filters";
+import {
+  parseFilters,
+  parseRange,
+  decodeCursor,
+  toQueryString,
+  OVERVIEW_RANGES,
+  NO_FILTERS,
+} from "@/lib/group-filters";
+import type { GroupFilters, OverviewRange } from "@/lib/group-filters";
 import { relativeTime, bytesParts } from "@/lib/format";
 import { Shell } from "@/app/components/shell/shell";
 import { Panel } from "@/app/components/ui/panel";
@@ -45,6 +52,7 @@ type LoadResult =
 
 async function load(
   filters: GroupFilters,
+  range: OverviewRange,
   after: string | string[] | undefined,
 ): Promise<LoadResult> {
   const started = Date.now();
@@ -59,7 +67,7 @@ async function load(
       listSparklines(ids),
       listServices(),
       countsByStatus(filters),
-      getOverviewTrend(filters),
+      getOverviewTrend(filters, range),
       getStorageStatus(),
     ]);
 
@@ -143,6 +151,77 @@ function GroupRow({
   );
 }
 
+/**
+ * What the trend panel says when the window it was asked for holds nothing.
+ *
+ * A chart of seven zero-height bars is not an answer, it is the absence of one:
+ * a reader cannot tell a quiet week from a broken query, an empty database or a
+ * dashboard pointed at the wrong place. Every one of those is worth
+ * distinguishing, and only the page knows which it is.
+ *
+ * The deployment this runs on makes the distinction matter more than it usually
+ * would. Its faults come from a generated scenario that ran once and stopped, so
+ * the default window goes empty a week later and stays that way -- and the
+ * honest thing to say is that this is a recorded window rather than a live feed,
+ * with a link to one that still has the data in it.
+ */
+function QuietWindow({
+  range,
+  filters,
+  filtered,
+  newestEvent,
+}: {
+  range: OverviewRange;
+  filters: GroupFilters;
+  filtered: boolean;
+  newestEvent: string | null;
+}) {
+  // Widening the window cannot help when a filter is what emptied it, and
+  // offering that link anyway would send the reader somewhere equally blank.
+  const wider = !filtered && range !== "30d" ? "30d" : null;
+
+  return (
+    <div className="flex h-24 flex-col justify-center gap-1.5">
+      <p className="text-sm text-ink">
+        {filtered
+          ? `No events in the last ${range} match this filter.`
+          : `No events in the last ${range}.`}
+      </p>
+
+      {!filtered && newestEvent && (
+        <p className="text-xs leading-relaxed text-ink-low">
+          The last one arrived {relativeTime(newestEvent)}, on{" "}
+          <span className="font-mono text-ink">{newestEvent} UTC</span>. The
+          faults below are a scenario that ran once and stopped, so this is a
+          recorded window rather than a live feed.
+        </p>
+      )}
+
+      {wider && (
+        <p>
+          <Link
+            href={`/${toQueryString(filters, { range: wider })}`}
+            className="text-xs text-accent-hi underline decoration-edge-strong underline-offset-2 transition-colors hover:decoration-current"
+          >
+            Show 30 days →
+          </Link>
+        </p>
+      )}
+
+      {filtered && (
+        <p>
+          <Link
+            href={`/${toQueryString(NO_FILTERS, { range })}`}
+            className="text-xs text-accent-hi underline decoration-edge-strong underline-offset-2 transition-colors hover:decoration-current"
+          >
+            Clear the filter →
+          </Link>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default async function Page({
   searchParams,
 }: {
@@ -150,7 +229,8 @@ export default async function Page({
 }) {
   const params = await searchParams;
   const filters = parseFilters(params);
-  const result = await load(filters, params.after);
+  const range = parseRange(params);
+  const result = await load(filters, range, params.after);
   const storage = result.ok ? bytesParts(result.storage.total_bytes) : null;
 
   const totalGroups = result.ok
@@ -205,7 +285,7 @@ export default async function Page({
           <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile label="Open faults" value={result.counts.open ?? 0} />
             <StatTile
-              label="Events · 7d"
+              label={`Events · ${range}`}
               value={result.trend.total}
               caption={filtered ? "matching this filter" : undefined}
             />
@@ -226,16 +306,44 @@ export default async function Page({
           </div>
 
           <Panel className="mb-7">
-            <OverviewTrend
-              daily={result.trend.daily}
-              total={result.trend.total}
-            />
+            <div className="mb-4 flex flex-wrap items-center justify-end gap-1">
+              {OVERVIEW_RANGES.map((option) => (
+                <Link
+                  key={option.key}
+                  href={`/${toQueryString(filters, { range: option.key })}`}
+                  aria-current={option.key === range ? "true" : undefined}
+                  className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${
+                    option.key === range
+                      ? "bg-accent/15 text-ink-hi ring-1 ring-inset ring-accent/25"
+                      : "text-ink-low hover:bg-surface-2 hover:text-ink"
+                  }`}
+                >
+                  {option.label}
+                </Link>
+              ))}
+            </div>
+
+            {result.trend.total === 0 && result.storage.event_rows > 0 ? (
+              <QuietWindow
+                range={range}
+                filters={filters}
+                filtered={filtered}
+                newestEvent={result.storage.newest_event}
+              />
+            ) : (
+              <OverviewTrend
+                daily={result.trend.daily}
+                total={result.trend.total}
+                range={range}
+              />
+            )}
           </Panel>
 
           <h2 className="mb-3 text-sm font-medium text-ink">Groups</h2>
 
           <FilterBar
             filters={filters}
+            range={range}
             services={result.services}
             counts={result.counts}
             total={totalGroups}
@@ -271,7 +379,7 @@ export default async function Page({
             */
             <div className="mt-4 flex justify-center">
               <Link
-                href={`/${toQueryString(filters, result.nextCursor)}`}
+                href={`/${toQueryString(filters, { range, after: result.nextCursor })}`}
                 className="rounded-lg border border-edge bg-surface-1 px-4 py-2 text-sm text-ink transition-colors hover:border-edge-strong hover:bg-surface-2"
               >
                 Older groups →

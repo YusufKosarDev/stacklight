@@ -172,6 +172,7 @@ const EMPTY_STORAGE: StorageStatus = {
   event_rows: 2163,
   rollup_rows: 190,
   oldest_event: "2026-08-11 15:12:00",
+  newest_event: "2026-08-13 07:23:33",
   last_sweep_at: "2026-08-13 06:07:00",
   last_sweep_source: "scheduled",
   last_sweep_window_days: 14,

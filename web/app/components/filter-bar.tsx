@@ -1,6 +1,10 @@
 import Link from "next/link";
-import type { GroupFilters } from "@/lib/group-filters";
-import { toQueryString } from "@/lib/group-filters";
+import type { GroupFilters, OverviewRange } from "@/lib/group-filters";
+import {
+  toQueryString,
+  DEFAULT_RANGE,
+  NO_FILTERS,
+} from "@/lib/group-filters";
 
 /**
  * The group list's controls.
@@ -21,11 +25,13 @@ const STATUS_CHIPS: { key: GroupFilters["status"]; label: string }[] = [
 
 export function FilterBar({
   filters,
+  range,
   services,
   counts,
   total,
 }: {
   filters: GroupFilters;
+  range: OverviewRange;
   services: string[];
   counts: Record<string, number>;
   total: number;
@@ -37,9 +43,15 @@ export function FilterBar({
     <div className="mb-4 space-y-3">
       <form method="get" className="flex flex-wrap items-center gap-2">
         {/* The status chips are links, so the form must carry the current one
-            forward or submitting a search would silently clear it. */}
+            forward or submitting a search would silently clear it. The range is
+            a row of links for the same reason and needs the same treatment:
+            without this, searching from a 30-day view would drop the reader back
+            to seven days without saying so. */}
         {filters.status && (
           <input type="hidden" name="status" value={filters.status} />
+        )}
+        {range !== DEFAULT_RANGE && (
+          <input type="hidden" name="range" value={range} />
         )}
 
         <input
@@ -74,7 +86,7 @@ export function FilterBar({
 
         {(filters.service || filters.q || filters.status) && (
           <Link
-            href="/"
+            href={`/${toQueryString(NO_FILTERS, { range })}`}
             className="px-2 py-1.5 text-sm text-ink-low transition-colors hover:text-ink"
           >
             Clear
@@ -88,7 +100,7 @@ export function FilterBar({
           return (
             <Link
               key={chip.label}
-              href={`/${toQueryString({ ...filters, status: chip.key })}`}
+              href={`/${toQueryString({ ...filters, status: chip.key }, { range })}`}
               aria-current={active ? "true" : undefined}
               className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
                 active

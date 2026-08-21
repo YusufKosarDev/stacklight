@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   parseFilters,
+  parseRange,
   encodeCursor,
   decodeCursor,
   toQueryString,
   NO_FILTERS,
+  DEFAULT_RANGE,
 } from "../lib/group-filters.ts";
 
 test("absent parameters mean no filter, not empty strings", () => {
@@ -81,10 +83,46 @@ test("the next-page link keeps the filters alongside the cursor", () => {
   // Losing the filters on page two is the classic version of this bug.
   const query = toQueryString(
     { service: "web-api", status: null, q: "TypeError" },
-    "2026-08-10T12:34:56.789012Z|7",
+    { after: "2026-08-10T12:34:56.789012Z|7" },
   );
 
   assert.match(query, /service=web-api/);
   assert.match(query, /q=TypeError/);
+  assert.match(query, /after=/);
+});
+
+test("an absent or invented range means the default one", () => {
+  // Same rule as the status filter above, and for the same reason: these arrive
+  // from hand-edited URLs and stale bookmarks, where showing the usual thing
+  // beats showing nothing.
+  assert.equal(parseRange({}), DEFAULT_RANGE);
+  assert.equal(parseRange({ range: "" }), DEFAULT_RANGE);
+  assert.equal(parseRange({ range: "all-time" }), DEFAULT_RANGE);
+  // `24h` is a range the group page offers and this one does not, so it is not
+  // simply an unknown word -- it is a valid range in the wrong place.
+  assert.equal(parseRange({ range: "24h" }), DEFAULT_RANGE);
+
+  assert.equal(parseRange({ range: "30d" }), "30d");
+  assert.equal(parseRange({ range: "30D" }), "30d");
+  // Next hands over an array when a key appears twice.
+  assert.equal(parseRange({ range: ["30d", "7d"] }), "30d");
+});
+
+test("a link spells out the range only when it is not the default", () => {
+  // Otherwise the front page would stop being reachable at `/`, and every link
+  // on it would carry a parameter that changes nothing.
+  assert.equal(toQueryString(NO_FILTERS, { range: "7d" }), "");
+  assert.equal(toQueryString(NO_FILTERS, { range: "30d" }), "?range=30d");
+});
+
+test("the range survives alongside the filters and the cursor", () => {
+  const query = toQueryString(
+    { service: "web-api", status: "open", q: null },
+    { range: "30d", after: "2026-08-10T12:34:56.789012Z|7" },
+  );
+
+  assert.match(query, /service=web-api/);
+  assert.match(query, /status=open/);
+  assert.match(query, /range=30d/);
   assert.match(query, /after=/);
 });

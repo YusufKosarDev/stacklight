@@ -1,4 +1,5 @@
 import type { Bucket } from "@/lib/queries";
+import type { OverviewRange } from "@/lib/group-filters";
 
 /*
  * Chart tokens.
@@ -219,18 +220,25 @@ export function TrendChart({
 export function OverviewTrend({
   daily,
   total,
+  range,
 }: {
   daily: number[];
   total: number;
+  range: OverviewRange;
 }) {
   const peak = Math.max(...daily, 1);
   const peakIndex = daily.findIndex((count) => count === peak && peak > 0);
+
+  // Read off the data rather than the range, so the axis cannot claim a span the
+  // bars do not cover.
+  const span = daily.length;
+  const window = `${span} days`;
 
   return (
     <figure className="m-0">
       <figcaption className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
         <span className="text-sm font-medium text-ink">
-          All events, last 7 days
+          All events, last {window}
         </span>
         <span className="font-mono text-xs tabular-nums text-ink-low">
           {total} total &middot; peak {peak}
@@ -241,7 +249,7 @@ export function OverviewTrend({
         className="flex h-24 items-end gap-[3px] border-b"
         style={{ borderColor: GRIDLINE }}
         role="img"
-        aria-label={`${total} events over the last 7 days, peaking at ${peak} in one day`}
+        aria-label={`${total} events over the last ${window}, peaking at ${peak} in one day`}
       >
         {daily.map((count, index) => (
           <span
@@ -257,9 +265,14 @@ export function OverviewTrend({
         ))}
       </div>
 
+      {/*
+        Three ticks whatever the span, because the bars are evenly spaced and the
+        ends are what orient a reader. The middle one is derived rather than
+        written down, so a new range does not need a new label here.
+      */}
       <div className="mt-2 flex justify-between font-mono text-[10px] tabular-nums text-ink-faint">
-        <span>7d ago</span>
-        <span>3d</span>
+        <span>{range === "30d" ? "30d ago" : "7d ago"}</span>
+        <span>{range === "30d" ? "15d" : "3d"}</span>
         <span>today</span>
       </div>
     </figure>
