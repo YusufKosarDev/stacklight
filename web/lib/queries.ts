@@ -1,5 +1,5 @@
 import { sql } from "@/lib/db";
-import type { Cursor, GroupFilters } from "@/lib/group-filters";
+import type { Cursor, GroupFilters, OverviewRange } from "@/lib/group-filters";
 
 export type GroupStatus = "open" | "resolved" | "ignored" | "regressed";
 
@@ -63,6 +63,7 @@ export type StorageStatus = {
   event_rows: number;
   rollup_rows: number;
   oldest_event: string | null;
+  newest_event: string | null;
   last_sweep_at: string | null;
   last_sweep_source: string | null;
   last_sweep_window_days: number | null;
@@ -190,10 +191,15 @@ export async function countsByStatus(
  */
 export async function getOverviewTrend(
   filters: GroupFilters,
+  range: OverviewRange,
 ): Promise<{ daily: number[]; total: number }> {
+  // One fewer than the window: `generate_series` is inclusive at both ends, so
+  // six days back plus today is seven bars.
+  const days = range === "30d" ? 29 : 6;
+
   const rows = (await sql()`
     select coalesce(sum(r.event_count), 0)::int as count
-      from generate_series(date_trunc('day', now()) - make_interval(days => 6),
+      from generate_series(date_trunc('day', now()) - make_interval(days => ${days}),
                            date_trunc('day', now()),
                            interval '1 day') as bucket
       left join event_rollups r
@@ -433,6 +439,11 @@ export async function getStorageStatus(): Promise<StorageStatus> {
            (select count(*)::int from event_rollups) as rollup_rows,
            (select to_char(min(received_at) at time zone 'utc', ${UTC}) from events)
              as oldest_event,
+           -- What the overview says when its window is empty. Read here rather
+           -- than in a query of its own: this one is already asking the events
+           -- table about itself, and the front page already waits for it.
+           (select to_char(max(received_at) at time zone 'utc', ${UTC}) from events)
+             as newest_event,
            (select to_char(ran_at at time zone 'utc', ${UTC})
               from retention_runs order by ran_at desc limit 1) as last_sweep_at,
            (select source

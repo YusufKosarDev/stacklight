@@ -1,7 +1,8 @@
-import type { GroupStatus } from "./queries.ts";
+import type { GroupStatus, Range } from "./queries.ts";
 
 /**
- * The group list's URL state: what is being filtered, and where the page starts.
+ * The group list's URL state: what is being filtered, how far back it looks, and
+ * where the page starts.
  *
  * Kept apart from the queries so it can be tested without a database, and so
  * there is one place that decides what an absent, repeated or malformed
@@ -18,6 +19,25 @@ export type GroupFilters = {
 export const NO_FILTERS: GroupFilters = { service: null, status: null, q: null };
 
 const STATUSES: GroupStatus[] = ["open", "resolved", "ignored", "regressed"];
+
+/**
+ * How far back the overview's trend looks.
+ *
+ * A subset of the group page's `Range` rather than a type of its own, so the two
+ * cannot drift into meaning different things by the same name. `24h` is
+ * deliberately absent: the overview draws one bar per day, and an hourly window
+ * on a daily chart would be one bar. The group page, which switches its bucket
+ * width with the range, still offers all three.
+ */
+export type OverviewRange = Extract<Range, "7d" | "30d">;
+
+export const OVERVIEW_RANGES: { key: OverviewRange; label: string }[] = [
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+];
+
+/** The window a link should use when nothing in the URL says otherwise. */
+export const DEFAULT_RANGE: OverviewRange = "7d";
 
 /** Long enough for any real search, short enough not to be a payload. */
 const MAX_QUERY = 200;
@@ -49,6 +69,19 @@ export function parseFilters(params: RawParams): GroupFilters {
       : null,
     q: q === null ? null : q.slice(0, MAX_QUERY),
   };
+}
+
+/**
+ * An unrecognised range becomes the default rather than an error, for the same
+ * reason an unrecognised status becomes no filter: these arrive from hand-edited
+ * URLs and stale bookmarks, and a page that shows the usual thing is a better
+ * answer than one that shows nothing.
+ */
+export function parseRange(params: RawParams): OverviewRange {
+  const raw = first(params.range)?.toLowerCase() ?? null;
+  return OVERVIEW_RANGES.some((option) => option.key === raw)
+    ? (raw as OverviewRange)
+    : DEFAULT_RANGE;
 }
 
 export type Cursor = { lastSeen: string; id: number };
@@ -83,18 +116,29 @@ export function decodeCursor(raw: string | string[] | undefined): Cursor | null 
 }
 
 /**
- * The querystring for a link that keeps the current filters.
+ * The querystring for a link that keeps the current view.
  *
  * Every link on the page goes through this. Dropping the filters when paging is
  * the classic version of this bug, and it is only avoided by having one place
- * that builds the URL.
+ * that builds the URL. The range joins them here for the same reason: it is one
+ * more thing a link can silently reset, and the chip that clears a filter has no
+ * business also throwing away the window somebody chose.
+ *
+ * The default range is omitted rather than spelled out, so the plain list keeps
+ * the plain URL it had before there was a range at all.
  */
-export function toQueryString(filters: GroupFilters, after?: string): string {
+export function toQueryString(
+  filters: GroupFilters,
+  options: { after?: string; range?: OverviewRange } = {},
+): string {
   const params = new URLSearchParams();
   if (filters.service) params.set("service", filters.service);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
-  if (after) params.set("after", after);
+  if (options.range && options.range !== DEFAULT_RANGE) {
+    params.set("range", options.range);
+  }
+  if (options.after) params.set("after", options.after);
 
   const query = params.toString();
   return query === "" ? "" : `?${query}`;
