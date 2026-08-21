@@ -72,16 +72,23 @@ export function parseFilters(params: RawParams): GroupFilters {
 }
 
 /**
- * An unrecognised range becomes the default rather than an error, for the same
- * reason an unrecognised status becomes no filter: these arrive from hand-edited
- * URLs and stale bookmarks, and a page that shows the usual thing is a better
- * answer than one that shows nothing.
+ * The window the URL asked for, or null when it did not ask for a usable one.
+ *
+ * Null is a third state rather than a spelling of the default, and the overview
+ * relies on the difference: absent means *choose a window for me*, where `7d`
+ * means seven days and to leave it at that even if seven days are empty. A page
+ * that widened the window under somebody who had just clicked "7 days" would
+ * have a button that appears not to work.
+ *
+ * An unrecognised value is treated as absent, for the same reason an
+ * unrecognised status becomes no filter: these arrive from hand-edited URLs and
+ * stale bookmarks, and showing the usual thing beats showing nothing.
  */
-export function parseRange(params: RawParams): OverviewRange {
+export function parseRange(params: RawParams): OverviewRange | null {
   const raw = first(params.range)?.toLowerCase() ?? null;
   return OVERVIEW_RANGES.some((option) => option.key === raw)
     ? (raw as OverviewRange)
-    : DEFAULT_RANGE;
+    : null;
 }
 
 export type Cursor = { lastSeen: string; id: number };
@@ -124,8 +131,12 @@ export function decodeCursor(raw: string | string[] | undefined): Cursor | null 
  * more thing a link can silently reset, and the chip that clears a filter has no
  * business also throwing away the window somebody chose.
  *
- * The default range is omitted rather than spelled out, so the plain list keeps
- * the plain URL it had before there was a range at all.
+ * A range handed in is always written out, including the default one. It used to
+ * be omitted to keep the plain list on a plain URL, and that stopped being safe
+ * when an absent range came to mean *choose for me*: the "7 days" button would
+ * have linked to `/`, the page would have chosen again, and the button would have
+ * looked broken. Every link that knows which window it wants now says so, and the
+ * only URL without one is the one nobody generated.
  */
 export function toQueryString(
   filters: GroupFilters,
@@ -135,9 +146,7 @@ export function toQueryString(
   if (filters.service) params.set("service", filters.service);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
-  if (options.range && options.range !== DEFAULT_RANGE) {
-    params.set("range", options.range);
-  }
+  if (options.range) params.set("range", options.range);
   if (options.after) params.set("after", options.after);
 
   const query = params.toString();

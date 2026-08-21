@@ -29,6 +29,10 @@ import type {
   GroupPage,
   GroupSummary,
   NavCounts,
+  // Imported as well as re-exported below: the re-export does not put the name in
+  // this module's scope, and without it `Range` silently resolves to the DOM
+  // interface of the same name.
+  Range,
   SimilarGroup,
   StorageStatus,
 } from "../../lib/queries";
@@ -52,7 +56,10 @@ type Scenario = {
   groups: GroupSummary[];
   nextCursor: string | null;
   counts: Record<string, number>;
+  /** What a seven-day window holds. */
   trend: { daily: number[]; total: number };
+  /** What a thirty-day one holds, so a test can set them apart. */
+  trend30d: { daily: number[]; total: number };
   services: string[];
   sparklines: Map<number, number[]>;
   storage: StorageStatus;
@@ -185,6 +192,7 @@ function blank(): Scenario {
     nextCursor: null,
     counts: {},
     trend: { daily: new Array(7).fill(0), total: 0 },
+    trend30d: { daily: new Array(30).fill(0), total: 0 },
     services: [],
     sparklines: new Map(),
     storage: EMPTY_STORAGE,
@@ -214,8 +222,19 @@ export async function countsByStatus(): Promise<Record<string, number>> {
   return scenario.counts;
 }
 
-export async function getOverviewTrend(): Promise<{ daily: number[]; total: number }> {
-  return scenario.trend;
+/**
+ * The one fixture that reads its arguments.
+ *
+ * The overview widens its window when the default one is empty, and a stub that
+ * answered the same thing whichever window it was handed could not tell the two
+ * apart -- so a test could not distinguish widening from not widening, which is
+ * the whole of the behaviour.
+ */
+export async function getOverviewTrend(
+  _filters: unknown,
+  range: Range,
+): Promise<{ daily: number[]; total: number }> {
+  return range === "30d" ? scenario.trend30d : scenario.trend;
 }
 
 export async function listServices(): Promise<string[]> {

@@ -77,43 +77,92 @@ test("a group row shows what it is and where it came from", async () => {
 });
 
 /*
- * The window, and what the page says when it is empty.
+ * The window: which one is drawn, and what is said when it holds nothing.
  *
  * A chart of seven zero-height bars cannot be told apart from a broken query or a
  * dashboard pointed at the wrong database, and this deployment reaches that state on
- * purpose: its faults come from a scenario that ran once and stopped. These four are
- * about the page distinguishing the cases rather than drawing all of them the same.
+ * purpose -- its faults come from a scenario that ran once and stopped. So an empty
+ * default window is widened rather than drawn, and an empty one that cannot be widened
+ * explains itself.
+ *
+ * The distinction these turn on is between a URL that named a window and one that did
+ * not. Absent means "choose for me"; `7d` means seven days, empty or not. Widening
+ * under somebody who has just clicked "7 days" would give them a button that appears
+ * not to work, and two of the tests below exist to catch exactly that.
  */
 
-test("an empty window says so, and says when the last event arrived", async () => {
+/** A window with something in it, sized to whichever range asked. */
+const busy = (days: number) => ({
+  daily: new Array(days).fill(1),
+  total: days,
+});
+
+/** Events exist; whether this window holds any is up to the trend fixtures. */
+const HAS_EVENTS = { event_rows: 2163 };
+
+test("an empty default window is widened to the one that has the data", async () => {
   reset();
   scenario.groups = [aGroup()];
   scenario.trend = { daily: new Array(7).fill(0), total: 0 };
-  // The events are still there; it is the last seven days that hold none of them.
-  scenario.storage = { ...scenario.storage, event_rows: 2163 };
+  scenario.trend30d = busy(30);
+  scenario.storage = { ...scenario.storage, ...HAS_EVENTS };
+
+  const html = await render(await open());
+  const page = await text(await open());
+
+  // The chart is drawn, over the wider window, and the tile counts the same one.
+  assert.match(page, /All events, last 30 days/);
+  assert.match(html, /Events · 30d/);
+  // And the reader is told they got a window they did not ask for.
+  assert.match(page, /No events in the last 7d — showing 30d/);
+  // The switcher marks where they ended up rather than where they started.
+  const thirty = html.match(/<a[^>]*>30 days<\/a>/)?.[0] ?? "";
+  assert.match(thirty, /aria-current="true"/);
+});
+
+test("asking for seven days gets seven days, empty or not", async () => {
+  // The whole reason an absent range is a third state. Widening here would make
+  // the "7 days" button look like it does nothing.
+  reset();
+  scenario.groups = [aGroup()];
+  scenario.trend = { daily: new Array(7).fill(0), total: 0 };
+  scenario.trend30d = busy(30);
+  scenario.storage = { ...scenario.storage, ...HAS_EVENTS };
+
+  const html = await render(await open({ range: "7d" }));
+  const page = await text(await open({ range: "7d" }));
+
+  assert.match(page, /No events in the last 7d/);
+  assert.doesNotMatch(page, /All events, last 30 days/);
+  assert.match(page, /recorded window rather than a live feed/);
+  assert.match(page, /2026-08-13 07:23:33 UTC/);
+  // With the wider one offered rather than taken.
+  assert.match(page, /Show 30d/);
+  assert.match(html, /range=30d/);
+
+  const seven = html.match(/<a[^>]*>7 days<\/a>/)?.[0] ?? "";
+  assert.match(seven, /aria-current="true"/);
+});
+
+test("the widest window, still empty, is explained rather than widened again", async () => {
+  reset();
+  scenario.groups = [aGroup()];
+  scenario.trend = { daily: new Array(7).fill(0), total: 0 };
+  scenario.trend30d = { daily: new Array(30).fill(0), total: 0 };
+  scenario.storage = { ...scenario.storage, ...HAS_EVENTS };
 
   const page = await text(await open());
 
-  assert.match(page, /No events in the last 7d/);
+  assert.match(page, /No events in the last 30d/);
   assert.match(page, /recorded window rather than a live feed/);
-  assert.match(page, /2026-08-13 07:23:33 UTC/);
-});
-
-test("an empty window offers the wider one that still has the data", async () => {
-  reset();
-  scenario.groups = [aGroup()];
-  scenario.trend = { daily: new Array(7).fill(0), total: 0 };
-  scenario.storage = { ...scenario.storage, event_rows: 2163 };
-
-  const html = await render(await open());
-
-  assert.match(html, /range=30d/);
+  // There is nothing wider to offer, so nothing is offered.
+  assert.doesNotMatch(page, /Show 30d/);
 });
 
 test("a genuinely empty database is not called a quiet window", async () => {
   // The distinction the whole branch exists for: nothing recorded, rather than
-  // nothing recorded lately. Offering to widen the window here would be a lie --
-  // there is no wider window with anything in it.
+  // nothing recorded lately. Widening here would spend a query to learn what the
+  // row count already said.
   //
   // `event_rows` is set explicitly because the shared storage fixture is not as
   // empty as its name suggests: it carries the row counts of a deployment that
@@ -128,66 +177,75 @@ test("a genuinely empty database is not called a quiet window", async () => {
 });
 
 test("an empty window under a filter blames the filter, not the clock", async () => {
+  // Widening is still tried -- a filter with nothing this week may well have
+  // something this month -- and only once the widest window is also empty does the
+  // filter become the thing worth pointing at.
   reset();
   scenario.groups = [aGroup()];
   scenario.trend = { daily: new Array(7).fill(0), total: 0 };
-  scenario.storage = { ...scenario.storage, event_rows: 2163 };
+  scenario.trend30d = { daily: new Array(30).fill(0), total: 0 };
+  scenario.storage = { ...scenario.storage, ...HAS_EVENTS };
   scenario.services = ["checkout-api"];
 
   const page = await text(await open({ service: "checkout-api" }));
 
   assert.match(page, /match this filter/);
-  // Widening the window cannot help when a filter is what emptied it.
-  assert.doesNotMatch(page, /Show 30 days/);
+  // Offering a wider window would send the reader somewhere equally blank.
+  assert.doesNotMatch(page, /Show 30d/);
 });
 
-test("the range switcher marks the window in force", async () => {
+test("a default window with events in it is left alone", async () => {
   reset();
   scenario.groups = [aGroup()];
-  scenario.trend = { daily: new Array(30).fill(1), total: 30 };
+  scenario.trend = busy(7);
+  scenario.trend30d = busy(30);
+  scenario.storage = { ...scenario.storage, ...HAS_EVENTS };
 
-  const html = await render(await open({ range: "30d" }));
+  const html = await render(await open());
+  const page = await text(await open());
 
-  // Each anchor is picked out by its own label and then asked about itself, so the
-  // assertion does not depend on the order React happens to write attributes in --
-  // and, unlike a bare search for `aria-current`, it fails if the mark lands on the
-  // wrong one of the two.
-  const thirty = html.match(/<a[^>]*>30 days<\/a>/)?.[0] ?? "";
+  assert.match(page, /All events, last 7 days/);
+  assert.doesNotMatch(page, /showing 30d/);
   const seven = html.match(/<a[^>]*>7 days<\/a>/)?.[0] ?? "";
-
-  assert.match(thirty, /aria-current="true"/);
-  assert.doesNotMatch(seven, /aria-current/);
-
-  // And the tile above the chart counts the same window the chart draws.
-  assert.match(html, /Events · 30d/);
+  assert.match(seven, /aria-current="true"/);
 });
 
-test("an unrecognised range falls back to the default rather than emptying the page", async () => {
-  // These arrive from hand-edited URLs and stale bookmarks.
+test("an unrecognised range is nobody's choice, so the data still picks", async () => {
+  // These arrive from hand-edited URLs and stale bookmarks. `all-time` is not a
+  // window this page has, so it is treated as no answer rather than as a demand.
   reset();
   scenario.groups = [aGroup()];
-  scenario.trend = { daily: [1, 2, 3, 4, 5, 6, 7], total: 28 };
+  scenario.trend = { daily: new Array(7).fill(0), total: 0 };
+  scenario.trend30d = busy(30);
+  scenario.storage = { ...scenario.storage, ...HAS_EVENTS };
 
   const page = await text(await open({ range: "all-time" }));
 
-  assert.match(page, /last 7 days/);
+  assert.match(page, /All events, last 30 days/);
 });
 
-test("the range survives a filter, a search and a page turn", async () => {
-  // Three links, one rule: none of them may quietly reset the window. The GET form
-  // carries it as a hidden field for the same reason the status chip does.
+test("every link spells out the window it is asking for", async () => {
+  // One rule: no link may quietly reset the window, and none of them may leave it
+  // to be chosen again -- including the default, which is the case that would make
+  // the "7 days" button look broken.
   reset();
   scenario.groups = [aGroup()];
   scenario.nextCursor = "2026-08-13T07:23:33.123456Z|1";
-  scenario.trend = { daily: new Array(30).fill(1), total: 30 };
+  scenario.trend = busy(7);
+  scenario.trend30d = busy(30);
   scenario.services = ["checkout-api"];
 
-  const html = await render(await open({ range: "30d", service: "checkout-api" }));
+  const html = await render(await open({ range: "7d", service: "checkout-api" }));
 
-  // The status chips.
-  assert.match(html, /href="\/\?service=checkout-api&amp;range=30d"/);
-  // The next-page link.
-  assert.match(html, /range=30d&amp;after=/);
-  // The search form.
-  assert.match(html, /<input type="hidden" name="range" value="30d"\/?>/);
+  // The switcher, which is where it matters most -- and which carries the filter
+  // too, so that changing the window does not silently widen the list as well.
+  const seven = html.match(/<a[^>]*>7 days<\/a>/)?.[0] ?? "";
+  const thirty = html.match(/<a[^>]*>30 days<\/a>/)?.[0] ?? "";
+  assert.match(seven, /href="\/\?service=checkout-api&amp;range=7d"/);
+  assert.match(thirty, /href="\/\?service=checkout-api&amp;range=30d"/);
+
+  // The status chips, the next-page link and the search form.
+  assert.match(html, /href="\/\?service=checkout-api&amp;range=7d"/);
+  assert.match(html, /range=7d&amp;after=/);
+  assert.match(html, /<input type="hidden" name="range" value="7d"\/?>/);
 });

@@ -15,6 +15,7 @@ import {
   decodeCursor,
   toQueryString,
   OVERVIEW_RANGES,
+  DEFAULT_RANGE,
   NO_FILTERS,
 } from "@/lib/group-filters";
 import type { GroupFilters, OverviewRange } from "@/lib/group-filters";
@@ -36,6 +37,9 @@ const STORAGE_LIMIT = 512 * 1024 * 1024;
 /** Enough to scan without scrolling forever; small enough that paging is real. */
 const PAGE_SIZE = 25;
 
+/** The last window there is to fall back on, so widening cannot loop. */
+const WIDEST_RANGE = OVERVIEW_RANGES[OVERVIEW_RANGES.length - 1].key;
+
 type LoadResult =
   | {
       ok: true;
@@ -46,16 +50,24 @@ type LoadResult =
       counts: Record<string, number>;
       trend: { daily: number[]; total: number };
       storage: StorageStatus;
+      /** The window the trend above actually covers, after any widening. */
+      range: OverviewRange;
+      /** Whether that window is wider than the one the page started with. */
+      widened: boolean;
       ms: number;
     }
   | { ok: false; ms: number };
 
+/**
+ * @param asked the window the URL named, or null to let the data choose one
+ */
 async function load(
   filters: GroupFilters,
-  range: OverviewRange,
+  asked: OverviewRange | null,
   after: string | string[] | undefined,
 ): Promise<LoadResult> {
   const started = Date.now();
+  const range = asked ?? DEFAULT_RANGE;
   try {
     // Two waves rather than one: the sparklines can only be asked for once the
     // page's group ids are known. Everything that does not depend on them goes
@@ -71,6 +83,26 @@ async function load(
       getStorageStatus(),
     ]);
 
+    /*
+     * Nobody named a window, the default one is empty, and there are events
+     * somewhere: widen rather than draw a row of zeroes.
+     *
+     * Only when nobody named one. Widening under a reader who has just clicked
+     * "7 days" would give them a button that appears not to work.
+     *
+     * The cost is a third round trip, and it lands where it does no harm. A
+     * deployment with traffic in the last week never takes this branch; one that
+     * has been quiet for a week takes it on every load and pays the ten or so
+     * milliseconds Neon needs, which nobody is waiting on. The `event_rows`
+     * check keeps a fork's first run -- an empty database -- from paying even
+     * that for a query whose answer is already known.
+     */
+    const widened =
+      asked === null &&
+      trend.total === 0 &&
+      storage.event_rows > 0 &&
+      range !== WIDEST_RANGE;
+
     return {
       ok: true,
       groups: page.groups,
@@ -78,8 +110,10 @@ async function load(
       sparklines,
       services,
       counts,
-      trend,
+      trend: widened ? await getOverviewTrend(filters, WIDEST_RANGE) : trend,
       storage,
+      range: widened ? WIDEST_RANGE : range,
+      widened,
       ms: Date.now() - started,
     };
   } catch (error) {
@@ -178,7 +212,12 @@ function QuietWindow({
 }) {
   // Widening the window cannot help when a filter is what emptied it, and
   // offering that link anyway would send the reader somewhere equally blank.
-  const wider = !filtered && range !== "30d" ? "30d" : null;
+  // Widening cannot help when a filter is what emptied the window, and there is
+  // nothing wider to offer once this is already the widest. The page reaches this
+  // component having tried that widening itself unless the reader named a window,
+  // so in practice the link appears for exactly one case: somebody asked for seven
+  // days, and seven days are empty.
+  const wider = !filtered && range !== WIDEST_RANGE ? WIDEST_RANGE : null;
 
   return (
     <div className="flex h-24 flex-col justify-center gap-1.5">
@@ -203,7 +242,7 @@ function QuietWindow({
             href={`/${toQueryString(filters, { range: wider })}`}
             className="text-xs text-accent-hi underline decoration-edge-strong underline-offset-2 transition-colors hover:decoration-current"
           >
-            Show 30 days →
+            Show {wider} →
           </Link>
         </p>
       )}
@@ -229,8 +268,10 @@ export default async function Page({
 }) {
   const params = await searchParams;
   const filters = parseFilters(params);
-  const range = parseRange(params);
-  const result = await load(filters, range, params.after);
+  const asked = parseRange(params);
+  const result = await load(filters, asked, params.after);
+  // What the page ended up showing, which is what every link on it must carry.
+  const range = result.ok ? result.range : (asked ?? DEFAULT_RANGE);
   const storage = result.ok ? bytesParts(result.storage.total_bytes) : null;
 
   const totalGroups = result.ok
@@ -331,11 +372,24 @@ export default async function Page({
                 newestEvent={result.storage.newest_event}
               />
             ) : (
-              <OverviewTrend
-                daily={result.trend.daily}
-                total={result.trend.total}
-                range={range}
-              />
+              <>
+                {result.widened && (
+                  /*
+                    The chart says "last 30 days" in its own caption, and the
+                    switcher marks which window is in force. This line is for the
+                    thing neither of them can say: that the reader did not ask for
+                    this one, and why they got it.
+                  */
+                  <p className="mb-3 text-xs text-ink-low">
+                    No events in the last {DEFAULT_RANGE} — showing {range}.
+                  </p>
+                )}
+                <OverviewTrend
+                  daily={result.trend.daily}
+                  total={result.trend.total}
+                  range={range}
+                />
+              </>
             )}
           </Panel>
 
