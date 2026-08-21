@@ -70,6 +70,7 @@ silently would have made the clip an illustration rather than evidence.
 - [Layout](#layout) — where things live
 - [Local development](#local-development) — running it, and the two constraints the dashboard tests carry
 - [Deployment](#deployment) — environment variables, and what is optional
+  - [The headers the dashboard sends, and the one that is deliberately weak](#the-headers-the-dashboard-sends-and-the-one-that-is-deliberately-weak)
 - [Measured results](#measured-results) — every number in this file, taken against the live deployment
   - [The clients, against the live collector](#the-clients-against-the-live-collector)
   - [One thing this found](#one-thing-this-found)
@@ -1543,6 +1544,46 @@ deployed to every application reporting errors.
 It is the liveness target and the deploy gate, so it must not be able to fail
 over something outside this process — a lesson this project learned the
 expensive way, twice.
+
+### The headers the dashboard sends, and the one that is deliberately weak
+
+The dashboard is a poor target: no login, no cookie, no token in the browser, no
+way to write anything. What it does do is render text that arrived from somewhere
+else — exception messages and stack traces posted by whoever holds an ingest key.
+React escapes what it interpolates and there is no `dangerouslySetInnerHTML`
+anywhere in `app/`, so [`next.config.ts`](web/next.config.ts) is a second line
+rather than the first.
+
+```
+default-src 'self';  script-src 'self' 'unsafe-inline';  style-src 'self' 'unsafe-inline';
+font-src 'self';  img-src 'self' data:;  connect-src 'self';
+object-src 'none';  base-uri 'self';  form-action 'self';  frame-ancestors 'none'
+```
+
+**`script-src` is the weak line and it is weak on purpose.** Next.js emits one
+inline bootstrap script per page to hand the server-rendered payload to React,
+and without `'unsafe-inline'` the page loads with a console full of violations.
+The strong version is a nonce, which needs middleware on every request — against
+a read path whose whole argument is that it does as little as possible between
+the browser and Postgres, for a threat this page does not have. So the policy
+stops an injected `<script src>` and does not stop an injected inline one. That
+is worth saying out loud rather than leaving a reader to infer it from a keyword.
+It becomes the wrong trade the day this dashboard grows a login.
+
+`style-src` needs the same keyword for a duller reason: the charts size their bars
+with `style={{ height }}`, because the values come from the data.
+
+**Measured rather than assumed.** All five routes were loaded in a real browser
+against the production database with the policy on: **zero console errors and
+zero warnings**. Then the policy was checked for doing anything at all —
+injecting `<script src="https://cdn.jsdelivr.net/…">` is refused, and so is
+`fetch("https://stacklight.onrender.com/actuator/health")`. That second one is
+the same claim the CI `policy` job makes about the source, now made to the
+browser: the read path talks to Postgres and to nothing else.
+
+`Strict-Transport-Security` is absent from that file because Vercel already sends
+it, and `X-Frame-Options: DENY` is there despite `frame-ancestors 'none'` making
+it redundant, for the browsers that only understand the older one.
 
 ---
 
