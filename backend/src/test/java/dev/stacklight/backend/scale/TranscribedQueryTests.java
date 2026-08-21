@@ -36,7 +36,14 @@ class TranscribedQueryTests {
                     "order by g.last_seen desc, g.id desc",
                     "(g.last_seen, g.id) < (",
                     "group by g.status",
-                    "date_trunc('day', now()) - make_interval(days => 6)",
+                    // The overview trend, pinned by the two lines only it has. The day
+                    // count used to stand here as `make_interval(days => 6)` and that was
+                    // a poor pin twice over: it is a literal the query no longer carries
+                    // now that the window is chosen from the URL, and while it did carry
+                    // it the same spelling appeared in listSparklines -- so the guard went
+                    // on passing against a query it was not watching.
+                    "select coalesce(sum(r.event_count), 0)::int as count",
+                    "and r.group_id in (",
                     "r.bucket_start < bucket + interval '1 day'",
                     // Still the shape getGroupSeries uses, where a selective group_id in
                     // front of it means the unindexable truncation never costs anything.
