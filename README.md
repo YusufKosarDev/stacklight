@@ -343,65 +343,50 @@ They are suggestions. Nothing merges on its own, and no model is involved.
 ### Source maps, and the promise they would break
 
 Resolving minified frames is the obvious next thing to want here, and it is the
-feature this file would most like to claim. It is not built. This section is what
-was found while working out whether it could be, because *"not yet"* was standing
-in for a reason nobody had checked.
+feature this file would most like to claim. It is not built, and *"not yet"* was
+standing in for a reason nobody had checked. Five, as it turns out.
 
-**Where the maps would come from rules out two of the three routes.** Fetching
-them from `sourceMappingURL` does not work: production bundles do not publish
-maps, and this project's own build is the example — **zero client-side map files**
-come out of it, because Next.js leaves `productionBrowserSourceMaps` off by
-default. Resolving in the client means shipping the map inside the application and
-doing the work in a process that is already handling a failure, which is the
-opposite of a capture that returns in 19.8 µs. That leaves uploading a map per
+**Two of the three routes are ruled out by where the maps come from.** Production
+bundles do not publish maps — this project's own build emits **zero** client-side
+map files, because Next.js leaves `productionBrowserSourceMaps` off. Resolving in
+the client means shipping the map inside the application and doing the work in a
+process that is already handling a failure. That leaves uploading a map per
 release, so the question becomes storage.
-
-**And storage is where the arithmetic stops being comfortable.** Measured on this
-repository's own dashboard — six routes, four runtime dependencies:
 
 | | |
 |---|---|
-| Production source maps | **6.39 MB** across 51 files |
-| The same build including dev chunks | 21.89 MB, 111 files |
+| Production source maps, this dashboard | **6.39 MB** across 51 files |
 | Distinct releases already in `events` | **11** |
 | Those releases, if each kept its maps | **~70 MB** |
 | The ceiling, and what is used today | **512 MB**, 10.4 MB |
 
-Old maps cannot be dropped, because an error from 1.4.0 needs 1.4.0's map to mean
-anything. Retention exists here to keep the database from filling and taking the
-project down with it; maps would eat that budget far faster than events ever have.
+Old maps cannot be dropped — an error from 1.4.0 needs 1.4.0's map to mean
+anything — so they would eat the retention budget far faster than events ever
+have.
 
-**The storage is survivable. The next part is not.** This section of the file
-opens by saying that nothing in the pipeline is free to change its mind between
-two runs, and source map resolution would make that false. A group's identity
-would depend on whether the map had been uploaded before or after the event
-arrived — the same fault landing in two groups depending on the order of two
-unrelated actions. Sentry solves this by reprocessing, which means keeping raw
-events until the artifacts show up. Keeping raw events indefinitely is the one
-thing a 512 MB ceiling forbids.
+**The storage is survivable; determinism is not.** A group's identity would depend
+on whether the map had been uploaded before or after the event arrived — the same
+fault landing in two groups depending on the order of two unrelated actions.
+Sentry solves this by reprocessing, which means keeping raw events until the
+artifacts show up, and a 512 MB ceiling forbids exactly that.
 
-**The gate this project sets for itself could not be run.** Resolved frames change
-the fingerprint input, so they need a new fingerprint version, and a version moves
-only after `GET /api/grouping/replay?version=N` reports the merges and splits it
-would cause. The replay reads raw stack traces from `events` and would need each
-event's release map alongside them. Retention deletes those traces after fourteen
-days. This is not version 2's situation, where the report ran and found nothing —
-here the report cannot be run at all.
+**And the gate this project sets for itself could not be run.** Resolved frames
+change the fingerprint input, so they need a new version, and a version moves only
+after the replay reports what it would merge and split. The replay reads raw
+traces, which retention deletes after fourteen days. Unlike version 2 — where the
+report ran and found nothing — here it cannot run at all.
 
-**What the feature would be worth today is one group.** Of fifteen groups in
-production, exactly one is flagged `minified`: a single event sent by hand on 7
-August to prove the flag works. The clients are Node-only and the browser is
-deliberately out of scope, so minified browser frames — the case source maps exist
-for — cannot reach this collector by any supported route.
+**What it would be worth today is one group.** One of fifteen is flagged
+`minified`, from a single event sent by hand to prove the flag works. The clients
+are Node-only and the browser is deliberately out of scope, so the case source
+maps exist for cannot reach this collector by any supported route.
 
-**One narrower version does survive all of that, and was still not built.** Only
+**One narrower version survives all of that, and was still not built.** Only
 `fingerprint_input` is hashed; the parsed frames are a separate column kept for
-display. So frames could be resolved for the group page without touching a single
-hash — no re-partitioning, no determinism problem, grouping exactly as it is and
-only the presentation improved. It was left alone because it would buy better
-frames on that one group in exchange for an upload endpoint, a retention policy
-for artifacts, and a hand-written VLQ decoder. The option is recorded here rather
-than forgotten, because the arithmetic changes the moment this collector accepts
+display, so frames could be resolved for the group page without touching a hash.
+It would buy better frames on that one group in exchange for an upload endpoint,
+an artifact retention policy and a hand-written VLQ decoder. Recorded rather than
+forgotten, because the arithmetic changes the moment this collector accepts
 browser events.
 
 ---
@@ -504,24 +489,21 @@ charge.
 ### ⚠️ The traffic behind those numbers is generated, not real
 
 **Nobody uses this deployment.** For four steps that left the scorecard on three
-judged buckets with all three detectors at 100%, which is not a comparison — it
-is three detectors agreeing about the same three obvious spikes. The choice of
-`poisson` rested on an argument about the shape of count data, and the argument
-had nothing to test it.
+judged buckets with all three detectors at 100% — three detectors agreeing about
+the same three obvious spikes, which is not a comparison. The choice of `poisson`
+rested on an argument about the shape of count data, and the argument had nothing
+to test it.
 
 So the traffic is written rather than collected. `tools/traffic/` holds a
-thirty-hour schedule played against the wall clock by an hourly workflow, and
-this section exists so that no number further down this file can be mistaken for
-something a user did.
+thirty-hour schedule played against the wall clock, and this section exists so no
+number further down can be mistaken for something a user did. Two things limit how
+honest that can be: rollup buckets are written as `date_trunc('hour', now())`, so
+history cannot be back-filled, and a generated scenario is only as good as its
+author's guesses about which shapes are hard.
 
-Two things constrain how honest that can be. Rollup buckets are written as
-`date_trunc('hour', now())`, so history cannot be back-filled and the scenario
-has to be played in real time rather than seeded. And a generated scenario can
-only be as good as its author's guesses about which shapes are hard.
-
-**What it deliberately does contain:** six services on both platforms, one
-recurring fault each, messages carrying the values the normalizer is supposed to
-strip, and profiles chosen so the detectors have somewhere to disagree.
+Six services on both platforms, one recurring fault each, messages carrying the
+values the normalizer is supposed to strip, and profiles chosen so the detectors
+have somewhere to disagree:
 
 | Service | Shape | Aimed at |
 |---|---|---|
@@ -533,47 +515,34 @@ strip, and profiles chosen so the detectors have somewhere to disagree.
 | `session-store` | busy for half a day, then dead | `ewma` — twelve quiet hours decay the baseline to the floor |
 
 **Two of the six aimed at the detector that was in charge.** A scenario that only
-embarrassed the alternatives would have been worth nothing as evidence for
-keeping `poisson`, and the point was to find out rather than to confirm. Both of
-those two landed, and it is the second of them — the ramp — that ended up
-deciding the comparison.
+embarrassed the alternatives would have been worth nothing as evidence for keeping
+`poisson`. Both landed, and the ramp is what ended up deciding the comparison.
 
-The schedule is data, so what it should produce was worked out before it was
-sent: `tools/traffic/simulate.mjs` runs the same three detectors and the same
-scoring rule over the schedule offline. That prediction is kept honest by being
-written down here **before** the live numbers, so a run that produces no
-disagreement can be told apart from a scenario that was never capable of
-producing any.
+The schedule is data, so what it should produce was worked out before it was sent:
+`simulate.mjs` runs the same detectors and scoring rule over it offline, and that
+prediction is written down here **before** the live numbers — so a run that
+produces no disagreement can be told from a scenario never capable of producing
+any. Its tests are about what the schedule must not do: exceed the hourly cap,
+outgrow the storage budget, or keep waking a free instance past its thirty hours.
 
-Its tests are about what the schedule must not do — exceed the collector's
-per-group hourly cap, outgrow the storage budget, or keep waking a free instance
-after its thirty hours are up.
+**A tick sends the difference, not the plan.** The first version ran hourly and
+assumed the run happened. It did not — of the first eighteen hours the scheduler
+fired for eleven, and the seven it dropped were not random: the profile aimed at
+the active detector peaks every sixth hour, and every one of those peaks landed in
+a skipped hour. The scorecard showed three identical detectors because the cases
+meant to separate them had never been sent.
 
-**A tick sends the difference, not the plan.** The first version ran once an
-hour and assumed the run happened. It did not: of the first eighteen hours the
-scheduler fired for eleven, and the seven it dropped were not a random seven —
-the profile aimed at the active detector peaks every sixth hour, and every one of
-those peaks landed in an hour that was skipped. The scorecard showed three
-detectors that looked identical because the cases meant to separate them had
-never been sent.
-
-Ticking more often is the obvious fix and is unsafe alone. Sending the plan again
-sends the hour again, and **doubling a count is worse than losing it**: a routine
-peak at forty becomes a genuine surge at eighty, so a case built to be a false
-positive turns into a true one and argues the opposite of what it was for. That
-happened twice before the reconciliation existed.
+Ticking more often is unsafe alone. Sending the plan again sends the hour again,
+and **doubling a count is worse than losing it**: a routine peak at forty becomes a
+surge at eighty, so a case built to be a false positive turns into a true one and
+argues the opposite of what it was for. That happened twice.
 
 So each tick reads what the hour already holds — over Neon's HTTP endpoint, with
-the dashboard's `SELECT`-only role — and sends only what is missing. Three things
-follow, and the third is the one that pays for the other two:
-
-- Sending twice is arithmetically impossible. Whatever arrived counts, whoever
-  sent it.
-- A skipped tick is recovered by the next one inside the same hour rather than
-  costing the whole hour.
-- **A tick that owes nothing returns before opening a connection to the
-  collector**, so the instance it would have woken stays asleep. Most ticks end
-  there, in under a second, and three an hour cost about what one did.
+the dashboard's `SELECT`-only role — and sends only what is missing. Sending twice
+becomes arithmetically impossible; a skipped tick is recovered inside the same
+hour; and **a tick that owes nothing returns before opening a connection to the
+collector**, so the instance it would have woken stays asleep. Most ticks end
+there, and three an hour cost about what one did.
 
 ### Alert delivery
 
@@ -689,21 +658,10 @@ the clients were built around, so it gets the same answer.
 
 ### What the trigger costs, and why the cadence is what it is
 
-**It is not free, and the bill is the reason it runs every three hours rather
-than every hour.** This is a real operating constraint rather than a tuning
-preference, so it belongs in the open.
-
-Render's free tier gives **750 instance-hours a month to the workspace, not to
-the service** — every free service in the account draws from the same allowance,
-and running out suspends all of them until the first of the next month. There is
-no overage bill to absorb it; the services simply stop.
-
-The arithmetic is unkind. A wake costs the 104-second cold start plus the fifteen
-minutes Render waits before idling the instance out again — about 16.7 minutes,
-whether the sweep found anything or not.
-
-**What each cadence would cost this service**, which is not the same thing as what
-the workspace has left:
+**It is not free, and the bill is why it runs every three hours rather than every
+hour.** A wake costs the 104-second cold start plus the fifteen minutes Render
+waits before idling the instance out — about 16.7 minutes, whether the sweep found
+anything or not.
 
 | Cadence | Wakes/day | Duty cycle | Hours/month |
 |---|---|---|---|
@@ -711,76 +669,29 @@ the workspace has left:
 | **Three-hourly** | 8 | **9.3%** | **69** |
 | Six-hourly | 4 | 4.7% | 35 |
 
-At hourly, this service alone claimed more than a quarter of the workspace
-allowance — and it claimed it to keep a dashboard current that does not need the
-service running at all. That is the wrong thing to spend a quota on. Three-hourly
-buys the same signal for a third of the price.
+Render's 750 instance-hours a month belong to the **workspace, not the service**,
+and running out suspends every free service in it until the first of the month.
+At hourly this service alone would claim more than a quarter of that allowance —
+to keep a dashboard current that does not need the service running at all.
 
-**What it actually cost, measured.** That table models the sweep and nothing else,
-so it was worth checking against the platform. Taken from Render's metrics for 14
-August — one full day, after the traffic run had finished, sampled every five
-minutes:
+**Measured against the model.** Render's metrics for 14 August, sampled every five
+minutes, show nine wake windows and a **12.8% duty cycle** — about 90 hours a
+month, above the modelled 9.3%. The gap is not the sweep: it is deploys and the
+wakes CI causes, which the table never counted. One day, projected forward, not a
+monthly total read off an invoice.
 
-| | |
-|---|---|
-| Wake windows | **9** — eight sweeps, one deploy |
-| Awake, sampled | ~170 minutes |
-| Awake, counting the cold starts before the first sample | ~185 minutes |
-| Duty cycle | **12.8%** |
-| At that rate | **~90 hours a month** |
+**What running out would do — and the part that falls out for free.** Every free
+service in the workspace stops, and the collector is one of them. The dashboard is
+not: it runs on Vercel against Neon and never touches Render, so an exhausted
+allowance stops ingestion and leaves the read path serving everything already
+collected. Nobody planned that as a contingency; it falls out of the read path not
+needing the ingestion service.
 
-The nine windows line up with the sweep's own run times to the minute. So the real
-figure runs above the modelled 9.3%, and the gap is not the sweep: it is deploys
-and the wakes CI causes, which the table never counted. Stated as what it is —
-one day, sampled at five-minute granularity, projected forward. Not a measured
-monthly total.
-
-**The allowance is shared, and this repository does not control it.** Five free
-web services run in this workspace and the 750 hours belong to all of them
-together. Measured over the first fifteen days of August: **one of the other four
-never slept at all for eleven days**, taking roughly a third of the month's
-allowance on its own before going quiet. Of the remaining three, two woke fewer
-than five times between them and one did not run once. Those are lower bounds read
-from sampled metrics rather than off a bill — a wake that begins and ends between
-two samples does not appear.
-
-Which turns the obvious conclusion around, and the honest sentence is narrower
-than the one this section used to imply. This service is a minority consumer:
-**Stacklight spends something like 90 hours of the 750, and that is the only part
-of the number this repository decides.** Whether the workspace runs out is decided
-by the sum, and the sum is not in this file. What settles it is the current
-period's free instance hours on Render's billing page; everything above is
-inferred from metrics rather than read from an invoice.
-
-**What running out would do.** Every free service in the workspace stops until the
-first of the next month, and the collector is one of them.
-
-**The dashboard is not.** It runs on Vercel against Neon and never touches Render,
-so an exhausted allowance does not take this project down — it stops ingestion and
-leaves the read path serving everything already collected. Nobody planned that as
-a contingency. It falls out of the read path not needing the ingestion service,
-which is the property the rest of this file is built on.
-
-There is no version of this that Stacklight solves by itself. Spending less helps
-the pool and guarantees nothing, because whatever it saves another service can
-take. Six-hourly would save about 40 hours a month, which against a pool where one
-service took 250 of them in eleven days does not change the outcome: it makes this
-service a slightly smaller minority and doubles the delay on noticing a reporter
-has gone quiet. **The cadence stays at three hours.** The lever that would matter
-is not in this repository.
-
-**What the slower cadence costs is latency, and only latency.** The condition
-being tested is a level rather than an edge: "no events in the last three hours"
-stays true for as long as the group stays quiet, so a sweep that arrives later
-still finds it true. A group with a genuine habit keeps qualifying for roughly
-sixteen hours before its busy hours age out of the 24-hour window, and
-three-hourly sampling enters that window about five times. What is genuinely lost
-is a silence that begins and ends between two sweeps — and a reporter that
-recovers by itself inside three hours is not the failure this alert exists for.
-
-A service woken constantly also stops being a service that sleeps, which is half
-of what this project demonstrates. The quota and the demonstration happen to want
-the same thing here, but the quota is what decided it.
+**The slower cadence costs latency and nothing else.** The condition is a level
+rather than an edge — "no events in the last three hours" stays true while the
+group stays quiet — so a later sweep still finds it true. What is genuinely lost
+is a silence that begins and ends between two sweeps, and a reporter that recovers
+by itself inside three hours is not the failure this alert exists for.
 
 ---
 
@@ -1108,20 +1019,14 @@ worse in the case that actually matters.
 
 ### A batch is one request, and the transaction is still per event
 
-For six steps the wire format was one event per request, and both clients said so
-in their own source: *"a batch is a loop rather than one call."* Twenty queued
-events meant twenty round trips, twenty connections and — less visibly — twenty
-follow-up passes on the collector, against a service that takes a hundred seconds
-to wake. `POST /api/events/batch` takes the whole drain at once.
+For six steps the wire format was one event per request — twenty queued events
+meant twenty round trips against a service that takes a hundred seconds to wake.
+`POST /api/events/batch` takes the whole drain at once.
 
-**One transaction per event, not one per batch.** This is the decision worth
-explaining, because the other one is easier to write.
-
-A batch here is a client emptying its queue, not a unit of work. The events in it
-are independent failure reports, possibly from different moments and different
-code paths in the same application, and nothing about them is jointly meaningful.
-Wrapping them in one transaction would invent a coupling the domain does not
-have — and then charge for it:
+**One transaction per event, not one per batch.** A batch here is a client
+emptying its queue, not a unit of work: the events are independent failure
+reports, and wrapping them in one transaction would invent a coupling the domain
+does not have — then charge for it.
 
 | A database error on the 87th of 100 | One transaction | Per event |
 |---|---|---|
@@ -1129,48 +1034,43 @@ have — and then charge for it:
 | What the client re-sends | all 100 | the remainder |
 | Work repeated on the collector | 86 events, twice | none |
 
-Re-sending is safe either way, because every event carries its own id and the
-insert is `on conflict do nothing`. The difference is how much work is thrown
-away to find that out.
+Re-sending is safe either way — every event carries its own id and the insert is
+`on conflict do nothing`. The difference is how much work is thrown away to find
+that out.
 
-**What this does not buy, stated plainly: the number of transactions is
-unchanged.** Twenty events are twenty transactions before and after. What
-collapses is twenty round trips into one, twenty connection acquisitions into
-one, and twenty follow-up passes into one — the last of these being the least
-visible and the most real, since every commit used to trigger a retention check,
-a scoring check and a drain request.
+**What this does not buy: the number of transactions is unchanged.** Twenty events
+are twenty transactions before and after. What collapses is twenty round trips into
+one, twenty connection acquisitions into one, and twenty follow-up passes into one
+— the last being the least visible and the most real, since every commit used to
+trigger a retention check, a scoring check and a drain request.
 
-**Validation is per event.** One message that outgrew its limit does not discard
-the nineteen around it. That also makes the answer actionable rather than
-narrative: a validation failure cannot be fixed by retrying and is reported as not
-retryable, while anything that went wrong reaching the database is. A client
-requeues what is retryable and drops what is not, without reading prose.
+**Validation is per event**, so one oversized message does not discard the
+nineteen around it. It also makes the answer actionable: a validation failure
+cannot be fixed by retrying and is reported as not retryable, while a database
+error is. A client requeues what is retryable and drops what is not, without
+reading prose.
 
-**202 with a per-event result, not 207.** The request itself succeeded — it
-parsed, it was authorised, it was processed — and what became of each event is
-data rather than transport status. 207 comes from WebDAV, is handled poorly by
-most clients, and would carry nothing the body does not already say.
+**202 with a per-event result, not 207.** The request itself succeeded, and what
+became of each event is data rather than transport status. 207 comes from WebDAV,
+is handled poorly by most clients, and carries nothing the body does not say.
 
 **A hundred events per batch, and a size limit before that.** Both clients default
-to twenty and cap their queues at 512, so a hundred is five times what either
-sends. The cap is a validation and therefore runs after the body has been read, so
-a declared length over 4 MB is refused before anything is parsed — the cheaper
-guard, running first.
+to twenty, so a hundred is five times what either sends. The cap is a validation
+and runs after the body is read, so a declared length over 4 MB is refused before
+anything is parsed — the cheaper guard, running first.
 
 **`deliveredBeforeFailure` is gone from both clients.** It existed to stop a
-partial failure being treated as a total one: a batch was twenty requests that
-could stop at the seventh, and re-sending the first six would spend a round trip
-each to be told by the duplicate check that they had already arrived. A batch is
-one request now. Either it happened and the collector said what became of every
-event, or it did not and the whole batch is owed again at the cost of one round
-trip rather than twenty.
+partial failure being treated as a total one, which a batch of twenty separate
+requests could produce. A batch is one request now: either it happened and the
+collector said what became of every event, or it did not and the whole batch is
+owed again at the cost of one round trip rather than twenty.
 
 The Java client reads that receipt without a JSON library, because
-[having no dependencies](#what-both-clients-do) is a property worth more than the
-eighty lines it costs. The reader is deliberately narrow — it walks one array and
-reads two fields — and it is tested against the hazard that matters: error
-messages the collector copied from somewhere else, carrying the same braces,
-brackets and quoted keys the scan is looking for.
+[having no dependencies](#what-both-clients-do) is worth more than the eighty
+lines it costs. The reader walks one array and reads two fields, and is tested
+against the hazard that matters: error messages the collector copied from
+somewhere else, carrying the same braces, brackets and quoted keys the scan looks
+for.
 
 ### Stack traces are sent exactly as the runtime printed them
 
@@ -1365,31 +1265,24 @@ paragraph.
 exception type.** Those are chosen by whoever holds an ingest key, so tagging by
 them would let a caller mint series until the registry filled the heap — the
 cardinality problem arriving through the front door rather than from a scanner.
-Outcomes are tagged; identities are not, and a test asserts a service name sent
-in a request body never appears in the metrics. A ceiling of 500 series is the
-second line, for the paths nobody thought of.
+Outcomes are tagged; identities are not, and a test asserts a service name sent in
+a request body never appears in the metrics. A ceiling of 500 series is the second
+line, for the paths nobody thought of.
 
-`/actuator/prometheus` sits behind the **console key**, not the ingest one, for
-the same reason the console does: it names every endpoint, every status code and
-the shape of the traffic. `/actuator/health` stays open — it is the uptime target
-and the deploy gate, and it must answer without a secret.
+`/actuator/prometheus` sits behind the **console key** for the same reason the
+console does: it names every endpoint, every status code and the shape of the
+traffic. `/actuator/health` stays open — it is the uptime target and the deploy
+gate.
 
 **One thing this cost two runs to find.** The endpoint answered 404 with the
-registry, the Prometheus client and the autoconfiguration all on the classpath
-and the exposure list naming it, which rules out every explanation the symptom
-suggests. Spring Boot 4 turns metrics exporters **off** by default where Boot 3
-had them on, so exposing an endpoint is no longer enough to have one:
-
-```
-@ConditionalOnEnabledMetricsExport
-management.defaults.metrics.export.enabled is considered false
-```
-
-Nothing in the dependency tree or the exposure list hints at it, and the
-condition evaluation report read from inside the running context is what said so.
-It is switched on for Prometheus specifically rather than through the blanket
-default, so another registry landing on the classpath later cannot turn an
-exporter on by accident.
+registry, the client and the autoconfiguration all present and the exposure list
+naming it — which rules out every explanation the symptom suggests. Spring Boot 4
+turns metrics exporters **off** by default where Boot 3 had them on, so exposing an
+endpoint is no longer enough to have one. Nothing in the dependency tree hints at
+it; the condition evaluation report read from inside the running context is what
+said so. Switched on for Prometheus specifically rather than through the blanket
+default, so another registry on the classpath cannot turn an exporter on by
+accident.
 
 ### Nothing sensitive reaches a log line
 
@@ -1568,38 +1461,23 @@ never reach the database at build time, and CI enforces it.
 
 ### The lockfile cannot be regenerated, and npm will not say so
 
-`npm ci` is safe. **`npm install` and `npm audit fix` are not**, and the damage
-they do here is quiet enough to be worth the paragraph.
+`npm ci` is safe. **`npm install` and `npm audit fix` are not.**
 
 Both rewrite `web/package-lock.json` from the machine they run on. Optional
-entries that machine has no use for — the Linux and wasm binaries, on a laptop
-that is neither — get pruned, and the packages that depend on them are left
-exactly as they were. The result is a file that names a dependency it no longer
-contains: `@emnapi/core` and `@emnapi/runtime` leave while `@img/sharp-wasm32`,
-`@tailwindcss/oxide-wasm32-wasi` and `@unrs/resolver-binding-wasm32-wasi` go on
-requiring them. That tree cannot be installed on Linux, which is where this is
-built and deployed.
+entries that machine has no use for get pruned while the packages depending on
+them are left alone, producing a file that names a dependency it no longer
+contains — a tree that cannot be installed on Linux, which is where this is built
+and deployed. It has happened twice, and both times npm printed `found 0
+vulnerabilities` and exited zero.
 
-It has happened twice, and neither time did npm mention it. The install prints
-`found 0 vulnerabilities` and exits zero.
-
-**So a dependency change here is a hand edit.** Look up the version, the tarball
-URL and the integrity hash, change those fields and nothing else — the nanoid
-advisory was closed in three lines that way. Then run `npm ci`, which installs
-from the file rather than rewriting it, and check the diff is still only what you
-typed.
+**So a dependency change here is a hand edit**: look up the version, the tarball
+URL and the integrity hash, change those fields and nothing else, then `npm ci`.
 
 The `policy` job runs [`lockfile-guard.mjs`](.github/scripts/lockfile-guard.mjs)
-on every push, and it is worth knowing which half of it does the work. The
-Linux-coverage assertion is the cheap one and it caught neither rewrite: the
-Linux count never moved, because `@emnapi` carries no platform in its name. What
-holds is the other assertion — every dependency the file names has to resolve
-inside it — because it looks at the consequence rather than at any package in
-particular. Run it yourself with:
-
-```bash
-node .github/scripts/lockfile-guard.mjs
-```
+on every push, and only half of it does the work. The Linux-coverage assertion
+caught neither rewrite, because `@emnapi` carries no platform in its name. What
+holds is the other half — every dependency the file names must resolve inside it —
+because it looks at the consequence rather than at any package in particular.
 
 ---
 
@@ -1809,60 +1687,42 @@ other than a hand.
 | Collector state when the trigger fired | asleep — 50 minutes since the last request |
 | Cold start, from the workflow's own timestamps | **104.4 s**, succeeded on attempt 1 |
 | Retries needed | none. `--max-time 120` outlasted the wake |
-| Authentication | 200, not 401 — the key in the workflow matches the one on the instance |
+| Authentication | 200, not 401 |
 | What the sweep returned | `{"silenceAlerts":0,"deletedEvents":0,"scoredObservations":0}` |
 | Proof it was this call and not a wake | first ever `retention_runs` row with `source = 'scheduled'` |
 
-The last row is the one that settles it. Retention records every pass with the
-reason it ran, and until this date every row in that table said `startup` — the
-catch-up that fires when the instance boots. `scheduled` is written by nothing
-except the sweep endpoint, so a row with that source is the external arm of the
-design having run, rather than the service having been woken by something else
-and cleaning up on its way in.
+The last row settles it. Retention records every pass with the reason it ran, and
+until this date every row said `startup` — the catch-up that fires when the
+instance boots. `scheduled` is written by nothing but the sweep endpoint.
 
-**All three counters were zero, and each is zero for a reason that was checked
-rather than assumed.** No event is older than the 14-day window, so retention had
-nothing to delete. Every detector verdict already carries an outcome, so scoring
-had nothing left to judge. And the silence rule reads a 24-hour window that
-currently holds no rollup rows at all — the newest is two days old — while the
-busiest group in the whole database has three active hours against a threshold of
-six. The query ran and correctly found nobody.
+All three counters were zero for reasons that were checked rather than assumed: no
+event was older than the 14-day window, every detector verdict already carried an
+outcome, and the silence rule reads a 24-hour window that then held no rollup rows
+at all. The query ran and correctly found nobody — which meant, stated plainly at
+the time, that **the silence detector had never raised an alert in production and
+on that data could not.**
 
-That last one is worth stating plainly rather than dressing up: **the silence
-detector has never raised an alert in production, and on this data it cannot.**
-The path from a qualifying group to an alert row is covered by nine tests against
-a real PostgreSQL, including the positive case and the one that matches this
-deployment exactly — busy yesterday, nothing since, correctly silent. What is
-missing is not the mechanism but traffic with a shape that trips it.
-
-**That paragraph was true when it was written and stopped being true the next
-day.** It is left standing rather than quietly edited, because what falsified it
-is the more useful half. The missing traffic arrived: the generated scenario ran from
-15:43 on 11 August to 06:57 on 13 August, and one of its six profiles —
-`session-store`, busy for half a day and then dead — was written to produce
-exactly the shape the rule looks for.
-
-**The rule found it the following morning.**
+**That was true when it was written and stopped being true the next day.** It is
+left standing rather than quietly edited, because what falsified it is the more
+useful half. The generated scenario ran from 11 to 13 August, and one of its six
+profiles — `session-store`, busy for half a day and then dead — was written to
+produce exactly the shape the rule looks for.
 
 | Alert | Raised | Service |
 |---|---|---|
 | 14 | 12 Aug, 07:56 | `session-store` |
 | 33–36 | 13 Aug, 05:38 | `checkout-api`, `media-transcoder`, `notification-worker`, `payments-api` |
 
-The first is the designed case doing what it was designed to do. The other four
-are an accident worth more than the design: when the scenario ended, every service
-in it went quiet at once, and the next sweep found four groups that had a habit
-and had stopped. **Five silence alerts in production, from the one signal the
-ingest path cannot produce** — no event arrives to trigger it, so only a caller
-from outside can ever notice.
+The first is the designed case doing what it was designed to do. The other four are
+an accident worth more than the design: when the scenario ended, every service went
+quiet at once, and the next sweep found four groups that had a habit and had
+stopped. **Five silence alerts from the one signal the ingest path cannot produce**
+— no event arrives to trigger it, so only a caller from outside can ever notice.
 
 All five were recorded with `delivery_state = disabled`, because no mail was
-configured at the time. That is the outbox design being right rather than a
-failure: the row is written in the same transaction as the sweep that found it,
-and delivery is a separate concern that was switched off.
-
-So the sentence above was accurate about 11 August and wrong about the project.
-The mechanism was never the doubt; the traffic was, and the traffic came.
+configured. That is the outbox being right rather than a failure: the row is
+written in the same transaction as the sweep that found it, and delivery is a
+separate concern that was switched off.
 
 ### Grouping, on the live deployment
 
@@ -2116,9 +1976,8 @@ does not depend on anyone remembering to take them.
 
 ### The interface, after the redesign
 
-Measured against production on 10 August 2026, which is the point of putting them
-in a separate table: every number above this line was taken before the dashboard
-was rebuilt.
+Measured against production on 10 August 2026 — every number above this line was
+taken before the dashboard was rebuilt.
 
 | Check | Result |
 |---|---|
@@ -2126,26 +1985,22 @@ was rebuilt.
 | Read-path query, per render | **0.01–0.02 s** across all four pages that run one |
 | End-to-end, warm | 0.32–0.57 s over seven routes, three samples each |
 | Layout, 5 routes × 4 widths | **20 of 20 clean** — no horizontal overflow at 390, 768, 1024 or 1440 |
-| Active nav item | correct on every route, at every width |
 | Client components | **none**, unchanged |
 | Runtime dependencies added | **none** — `package.json` untouched |
 | Build without `DATABASE_URL` | still passes |
 | Text contrast | 12.10, 7.15, 5.04 — the ramp clears 4.5:1 at every step |
 | Chart series contrast | 4.58 and 6.37 against `#09090b` |
 
-The read-path number is worth separating from the end-to-end one. 0.01 s is the
-database query inside the render; 0.32 s is what a browser waits for, and the
-difference is Vercel's function and the network rather than anything this project
-controls. Both are quoted because quoting only the first would flatter the page
-and quoting only the second would hide where the time actually goes.
+Both timings are quoted because either alone misleads: 0.01 s is the database
+query inside the render, 0.32 s is what a browser waits for, and the difference is
+Vercel's function and the network rather than anything this project controls.
 
-The redesign also added a query — the sidebar's group and alert counts, on every
-route. It does not show up: the read path measures the same as it did before the
-sidebar existed.
+The redesign also added a query — the sidebar's counts, on every route — and it
+does not show up: the read path measures the same as it did before the sidebar
+existed.
 
-**What this table does not show.** Nothing here is a regression test. These are
-measurements taken by hand at a point in time, the same as every other table in
-this file.
+**Nothing here is a regression test.** These are measurements taken by hand at a
+point in time, the same as every other table in this file.
 
 ### The list, once it could be filtered
 
@@ -2260,15 +2115,11 @@ charge changed.
 
 ### What is built and not yet switched on
 
-The sweep used to be listed here, waiting on `COLLECTOR_URL` and `INGEST_API_KEY`
-as repository secrets. They are set, it has run, and the measurement is in the
-table above. One thing is left.
-
 **Grouping v2** is complete, tested and deliberately inactive.
 `stacklight.grouping.active-version` stays at 1.
 
-The replay report was the condition this file set for moving it. It has been run
-twice, and the second run is the one that decides:
+The replay report was the condition this file set for moving it, and it has run
+twice:
 
 ```
 first run    {"version":2,"groupsTotal":9, "groupsCovered":7, "eventsReplayed":31,
@@ -2278,66 +2129,43 @@ after the    {"version":2,"groupsTotal":15,"groupsCovered":13,"eventsReplayed":2
 traffic run   "merges":[],"splits":[]}
 ```
 
-The first run could not answer the question — 31 events contained no case that
-told the two versions apart, which is absence of evidence rather than evidence.
-The second replays **seventy times** as many events and covers every group that
-has a stack trace to replay; the two it misses are the two `no_frames` groups,
-which have nothing to replay by definition. Still nothing merges and nothing
-splits, and this time that means something.
+The first could not answer the question — 31 events held no case that told the two
+versions apart, which is absence of evidence rather than evidence. The second
+replays **seventy times** as many and covers every group with a trace to replay.
+Still nothing merges and nothing splits, and this time that means something.
 
 **Both of v2's changes were checked against what is actually stored, and neither
 does what it was written to do here.**
 
-*The frame-signature change cannot fire at all.* V2 keeps a frame's file beside
-its declaring class when the two differ, so that `Object.<anonymous>` in two
-unrelated JavaScript files stops collapsing into one signature. Every JavaScript
-frame in this database has no declaring class, so v2 falls back to `file#function`
-— which is exactly what v1 already produces. On the Java side the file always
-repeats the class, so v2 returns `class#function`, identical again. The change
-targets a shape this parser does not produce.
+*The frame-signature change cannot fire at all.* V2 keeps a frame's file beside its
+declaring class when the two differ. Every JavaScript frame in this database has no
+declaring class, so v2 falls back to `file#function` — what v1 already produces. On
+the Java side the file repeats the class, so both return `class#function`. The
+change targets a shape this parser does not produce.
 
-*The frame-count change does not fix the one real over-split.* Groups 39 and 40
-are the same fault reached through two entry points, which is the case v2 exists
-for:
-
-```
-g39   frame 1   CheckoutController$CartService#total     same
-g39   frame 2   CheckoutController#boom                  differs
-g40   frame 1   CheckoutController$CartService#total     same
-g40   frame 2   CheckoutController#handled               differs
-```
-
-Same service, same exception, same frames 3 and 4. V1 splits them across eight
-frames and **v2 splits them too**, because the divergence is at frame two and v2
-hashes the first three.
+*The frame-count change does not fix the one real over-split.* Groups 39 and 40 are
+the same fault reached through two entry points — the case v2 exists for — but they
+diverge at frame **two**, and v2 hashes the first three. V1 splits them and v2
+splits them too.
 
 **The test for that merge was written to the algorithm rather than to the data.**
-`oneFaultReachedThroughTwoPathsBecomesOneGroup` builds two paths that diverge at
-frame four, and v2 merges them correctly. That shape did not occur once in 2,170
-events. The shape that did occur diverges one frame earlier, and a replay gate
-existing to find out is the only reason anybody knows.
+It builds two paths diverging at frame four, which v2 merges correctly, and that
+shape did not occur once in 2,170 events. A replay gate existing to find out is the
+only reason anybody knows.
 
-So v2 stays off, on evidence this time rather than for want of it. Switching it
-on would re-partition every group in public — new groups opening while old ones
-stop growing, on a dashboard somebody is reading — and buy zero merges, zero
-splits, and an over-split that survives the change.
+So v2 stays off on evidence rather than for want of it. Switching it on would
+re-partition every group in public and buy zero merges, zero splits, and an
+over-split that survives the change.
 
-The obvious repair is a trap worth naming. Hashing a single frame would merge 39
-and 40, and v2's own reasoning rejects it: the top frame is often a shared helper
-that throws for unrelated reasons. Both facts are now tests, and dropping the
-limit to one fails both of them at once. What the data asks for is a different
-rule — ignoring handler and entry-point frames, say — rather than a smaller
+The obvious repair is a trap worth naming: hashing a single frame would merge 39
+and 40, and v2's own reasoning rejects it — the top frame is often a shared helper
+that throws for unrelated reasons. Both facts are now tests, and dropping the limit
+to one fails both at once. The data asks for a different rule, not a smaller
 number, and that is a design question rather than a setting.
 
-**The code stays.** It is the working half of the versioning architecture, it is
-what the replay evaluates, and the finding above was only possible because two
-versions can run over the same events side by side. Deleting the subject of the
-experiment to tidy up would be the wrong lesson to take from it.
-
-That is not a loose end left by accident. The version moves on evidence by
-design, and the collector's address is deliberately absent from this repository —
-the CI `policy` job fails the build if it appears anywhere under `web/`, which is
-what keeps the read path honest.
+**The code stays.** It is the working half of the versioning architecture and what
+the replay evaluates; the finding above was only possible because two versions can
+run over the same events side by side.
 
 ### Tests, as they stand
 
@@ -2371,51 +2199,26 @@ runs on every push with everything else.
 
 ### The dashboard renders in a test now, and it cost nothing to install
 
-This section used to say the dashboard's count was the honest weak spot, because
-it covered pure logic and nothing that rendered. That was true and it mattered: a
-group page could have lost its stack trace panel, or the scorecard could have
-labelled the wrong detector active, and every test would still have passed.
+The dashboard's count used to cover pure logic and nothing that rendered: a group
+page could have lost its stack trace panel and every test would still have passed.
+Fixing that looked like it needed a DOM, a DOM needs a package, and a dependency
+list this short is a property this file claims out loud.
 
-The reason it stayed that way was a real constraint rather than laziness.
-Rendering needs a DOM, a DOM needs a package, and `web/package.json` holding four
-runtime dependencies and no test runner is a property this file claims out loud.
+It turned out not to be a trade. `tsc` is already here for `next build` and emits
+JSX; `react-dom/server` is already here and renders it; `node:test` is built in.
+**Nothing was added to either dependency list.** Three pieces of glue, all project
+code: a tsconfig that emits to `.render-out/`, a resolver that teaches Node the
+`@/` alias and points `@/lib/queries` at the fixtures, and a walker that awaits
+the components before rendering — a page awaits its query and then returns a shell
+that awaits its own, which React will not render synchronously.
 
-It turned out not to be a trade. Four things were checked before choosing:
+The fixtures are annotated with the real exported query types, so `tsc` fails if a
+query's shape changes and the fixture does not. Fixtures that can drift are worse
+than none, because they keep passing.
 
-| | |
-|---|---|
-| Can `node --test` load a `.tsx`? | **No.** Type stripping does not transform JSX, so every approach needs a transform |
-| Is a transform already here? | **Yes.** `typescript` is a devDependency for `next build`, and `tsc` emits JSX under the existing `jsx: react-jsx` |
-| Is a renderer already here? | **Yes.** `react-dom/server` exposes `renderToStaticMarkup`, and `react-dom` is a runtime dependency |
-| Does `next/link` render outside Next? | **Yes.** It emits a plain `<a>` |
-
-So the pages are compiled by the TypeScript that was already installed, rendered
-by the `react-dom` that was already installed, and asserted with `node:test`,
-which is built in. **Nothing was added to either dependency list.**
-
-Three pieces of glue, all of them project code:
-
-- **`tsconfig.render-test.json`** emits to `.render-out/`. The root layout is
-  excluded: it loads a font through `next/font/google`, which only resolves
-  inside the Next build, and no page needs it — every page renders its own shell.
-- **`test/render/resolve.cjs`** teaches Node the `@/` alias, which `tsc` leaves
-  in the output because it is a bundler convention. It also points
-  `@/lib/queries` at the fixtures. That is the only seam a render test needs:
-  every page reaches the database through that module and through nothing else,
-  and `lib/db.ts` builds its handle lazily, so importing it opens no connection.
-- **`test/render/render.ts`** awaits the components before rendering. A page
-  awaits its query and then returns a shell that awaits its own, which React
-  refuses to render synchronously; resolving that is a server-components
-  runtime's job, and pulling one in would have been the dependency this avoided.
-
-The fixtures are annotated with the real exported query types, so `tsc` fails if
-a query's shape changes and the fixture does not. Fixtures that can drift are
-worse than none, because they keep passing.
-
-**What is still not covered.** No browser runs, so nothing here sees CSS, layout,
-or anything that only breaks at a real viewport width — those are still checked
-by hand and by looking. The tests assert on what the page says rather than on how
-it is arranged, which is the point: a restyle should not break them, and a
+**What is still not covered.** No browser runs, so nothing here sees CSS, layout
+or anything that only breaks at a real viewport width. The tests assert on what
+the page says rather than how it is arranged — a restyle should not break them, a
 deleted stack trace panel should.
 
 ### The read path has its own cold start, and it is not free
