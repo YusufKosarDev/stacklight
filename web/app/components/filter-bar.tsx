@@ -1,10 +1,6 @@
 import Link from "next/link";
 import type { GroupFilters, OverviewRange } from "@/lib/group-filters";
-import {
-  toQueryString,
-  DEFAULT_RANGE,
-  NO_FILTERS,
-} from "@/lib/group-filters";
+import { toQueryString, NO_FILTERS } from "@/lib/group-filters";
 
 /**
  * The group list's controls.
@@ -50,9 +46,7 @@ export function FilterBar({
         {filters.status && (
           <input type="hidden" name="status" value={filters.status} />
         )}
-        {range !== DEFAULT_RANGE && (
-          <input type="hidden" name="range" value={range} />
-        )}
+        <input type="hidden" name="range" value={range} />
 
         <input
           type="search"

@@ -91,28 +91,33 @@ test("the next-page link keeps the filters alongside the cursor", () => {
   assert.match(query, /after=/);
 });
 
-test("an absent or invented range means the default one", () => {
-  // Same rule as the status filter above, and for the same reason: these arrive
-  // from hand-edited URLs and stale bookmarks, where showing the usual thing
-  // beats showing nothing.
-  assert.equal(parseRange({}), DEFAULT_RANGE);
-  assert.equal(parseRange({ range: "" }), DEFAULT_RANGE);
-  assert.equal(parseRange({ range: "all-time" }), DEFAULT_RANGE);
+test("an absent or invented range is nobody's choice, not the default", () => {
+  // Null rather than the default, because the overview treats the two
+  // differently: nothing in the URL lets it widen an empty window, where `7d`
+  // means seven days and to leave them empty if that is what they are.
+  assert.equal(parseRange({}), null);
+  assert.equal(parseRange({ range: "" }), null);
+  assert.equal(parseRange({ range: "all-time" }), null);
   // `24h` is a range the group page offers and this one does not, so it is not
   // simply an unknown word -- it is a valid range in the wrong place.
-  assert.equal(parseRange({ range: "24h" }), DEFAULT_RANGE);
+  assert.equal(parseRange({ range: "24h" }), null);
 
+  assert.equal(parseRange({ range: "7d" }), "7d");
   assert.equal(parseRange({ range: "30d" }), "30d");
   assert.equal(parseRange({ range: "30D" }), "30d");
   // Next hands over an array when a key appears twice.
   assert.equal(parseRange({ range: ["30d", "7d"] }), "30d");
 });
 
-test("a link spells out the range only when it is not the default", () => {
-  // Otherwise the front page would stop being reachable at `/`, and every link
-  // on it would carry a parameter that changes nothing.
-  assert.equal(toQueryString(NO_FILTERS, { range: "7d" }), "");
+test("a link always spells out the range it is asking for", () => {
+  // Including the default. Omitting it would make the "7 days" button link to
+  // `/`, which is the one URL that means "choose for me" -- so the page would
+  // choose again, and the button would look broken.
+  assert.equal(toQueryString(NO_FILTERS, { range: DEFAULT_RANGE }), "?range=7d");
   assert.equal(toQueryString(NO_FILTERS, { range: "30d" }), "?range=30d");
+  // A link built without one still asks for nothing, which is how the page keeps
+  // a plain `/` meaning what it means.
+  assert.equal(toQueryString(NO_FILTERS), "");
 });
 
 test("the range survives alongside the filters and the cursor", () => {

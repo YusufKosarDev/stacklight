@@ -8,7 +8,7 @@ each one explaining why it grouped where it did, and the dashboard that reads th
 keeps working while the service that collects them is asleep.**
 
 [![CI](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml/badge.svg)](https://github.com/YusufKosarDev/stacklight/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-359-success)](#tests-as-they-stand)
+[![Tests](https://img.shields.io/badge/tests-360-success)](#tests-as-they-stand)
 [![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org/)
@@ -1024,6 +1024,46 @@ sparklines ask only for the ids on screen.
 The status counts on the chips deliberately ignore the status filter while
 respecting the others. A count that collapsed to the status already selected
 would stop being a way to navigate.
+
+### The window is URL state too, and an empty one is not a chart
+
+The trend above the list draws seven days by default. This deployment's faults
+come from a scenario that ran once and stopped, so a week after it ended the
+default window went empty — and a row of zero-height bars is the least useful
+thing a chart can say. A reader cannot tell a quiet week from a broken query, an
+empty database, or a dashboard pointed somewhere else.
+
+So the window went into the URL beside the filters, and the page reads three
+states rather than two:
+
+| URL | means |
+|---|---|
+| no `range` | choose a window with something in it |
+| `?range=7d` | seven days, empty or not |
+| `?range=30d` | thirty days |
+
+**Absent is not a spelling of the default.** When nothing names a window and the
+default one is empty while events exist somewhere, the page widens instead of
+drawing zeroes, and says so above the chart: *no events in the last 7d — showing
+30d*. Nothing is hidden by that — the chart captions its own window and the
+switcher marks which one is in force — and the reader gets a chart rather than a
+blank.
+
+When a reader *has* named a window, it is left alone. Widening under somebody who
+just clicked "7 days" would give them a button that appears not to work, and that
+is also why **every link on the page spells out the window it is asking for**,
+including the default one. Omitting it would have made "7 days" link to `/`,
+which is the one URL that means *choose for me*.
+
+An empty window that cannot be widened explains itself instead: when the last
+event arrived, that this is a recorded window rather than a live feed, and — if a
+filter is what emptied it — that the filter is the thing to change. A genuinely
+empty database gets none of that; *nothing yet* and *nothing lately* are
+different answers and only the page knows which one it is holding.
+
+The widening costs one extra query, and it lands where it does no harm: a
+deployment with traffic in the last week never takes that branch, and one that
+has been quiet for a week is not a deployment anybody is waiting on.
 
 ![A group page: the fingerprint input, the frame breakdown, and the trend](docs/screenshots/group.png)
 
@@ -2285,9 +2325,9 @@ what keeps the read path honest.
 | Java SDK | **56** | JUnit, plus an HTTP server from the JDK |
 | Node SDK | **30** | `node --test` |
 | Dashboard, pure logic | **19** | `node --test` on TypeScript, no runner installed |
-| Dashboard, rendered | **30** | `node --test` on pages compiled by the TypeScript already here |
+| Dashboard, rendered | **31** | `node --test` on pages compiled by the TypeScript already here |
 | Traffic scenario | **18** | `node --test`, over the schedule as pure data |
-| **Total** | **359** | the number on the badge at the top |
+| **Total** | **360** | the number on the badge at the top |
 
 The badge is a written number rather than a live counter, and the CI `policy`
 job checks it against this table so the two cannot drift apart. Counting them
