@@ -40,20 +40,60 @@ import type { NextConfig } from "next";
  * stylesheet.
  *
  * Vercel already sends `Strict-Transport-Security`, so it is not repeated here.
+ *
+ * One deliberate exception to all of the above is made for preview deployments, and
+ * it is described where it is made.
  */
-const CONTENT_SECURITY_POLICY = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
+const directives: Record<string, string[]> = {
+  "default-src": ["'self'"],
+  "script-src": ["'self'", "'unsafe-inline'"],
+  "style-src": ["'self'", "'unsafe-inline'"],
   // next/font copies the font files into the build, so there is no font host to allow.
-  "font-src 'self'",
-  "img-src 'self' data:",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join("; ");
+  "font-src": ["'self'"],
+  "img-src": ["'self'", "data:"],
+  "connect-src": ["'self'"],
+  "object-src": ["'none'"],
+  "base-uri": ["'self'"],
+  "form-action": ["'self'"],
+  "frame-ancestors": ["'none'"],
+};
+
+/**
+ * Preview deployments get one hole in that, and only preview deployments.
+ *
+ * Vercel injects its comment toolbar into a preview by adding a script from
+ * vercel.live, which the policy above refuses -- correctly, and with the console
+ * error to prove it. The toolbar is how somebody leaves a note on a change before
+ * it ships, so refusing it costs a real thing on the one deployment where that
+ * thing is wanted.
+ *
+ * The hosts are Vercel's own published list rather than a set worked out from
+ * error messages, so the next piece of the toolbar to load does not need another
+ * round of this.
+ *
+ * **The condition is `=== "preview"`, not `!== "production"`.** Those differ in two
+ * places and both matter: a local `next start` and a `vercel dev` would both take
+ * the loose branch under the looser test, and neither has a toolbar to serve. This
+ * way the policy anybody runs locally is the policy production sends, which is the
+ * only way local testing of it means anything.
+ *
+ * This is read once, when `headers()` is evaluated at build time. Each deployment
+ * builds with its own `VERCEL_ENV`, so the production build never emits these hosts
+ * -- it is not a runtime check that could be got at.
+ */
+if (process.env.VERCEL_ENV === "preview") {
+  directives["script-src"].push("https://vercel.live");
+  directives["connect-src"].push("https://vercel.live", "wss://ws-us3.pusher.com");
+  directives["img-src"].push("https://vercel.live", "https://vercel.com", "blob:");
+  directives["style-src"].push("https://vercel.live");
+  directives["font-src"].push("https://vercel.live", "https://assets.vercel.com");
+  // Absent otherwise, so `default-src 'self'` keeps refusing every foreign frame.
+  directives["frame-src"] = ["'self'", "https://vercel.live"];
+}
+
+const CONTENT_SECURITY_POLICY = Object.entries(directives)
+  .map(([directive, sources]) => `${directive} ${sources.join(" ")}`)
+  .join("; ");
 
 const nextConfig: NextConfig = {
   async headers() {
