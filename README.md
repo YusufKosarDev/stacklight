@@ -20,7 +20,51 @@ keeps working while the service that collects them is asleep.**
 
 </div>
 
-**Status: step 12.** Events are grouped into distinct faults, counted into an
+> **In one paragraph.** A Spring Boot service takes error events, groups them into
+> distinct faults by a fingerprint you can check by hand, and rolls them into an
+> hourly trend. A Next.js dashboard reads those tables **straight from Postgres**
+> and never speaks to the ingestion service — so when the free instance falls
+> asleep for a hundred seconds, the dashboard still answers in under one.
+
+- **The bet, measured.** Dashboard **0.39 s** while the collector took **104 s** to
+  wake, two seconds apart. Nine cold starts on record, none under 95 s. A weekly
+  job re-takes the pair against the live deployment, and a test fails the build if
+  the read path ever dials anything but Postgres.
+- **Grouping you can argue with.** No model, no training, same answer every run.
+  Every group shows the exact string that was hashed and why.
+- **Three anomaly detectors, and a scorecard that ranks them.** Two run in shadow.
+  The one in charge was chosen by 111 judged hours, not by argument — and the
+  measurement changed the choice.
+- **Built for a plan that suspends you at 512 MB.** Retention runs on ingest,
+  because a timer cannot fire into a sleeping process.
+- **The data layer was loaded to a million rows** to find out whether the indexes
+  were right. One of them was not.
+
+| | |
+|---|---|
+| **Ingestion** | Java 21 · Spring Boot 4.1 · Flyway · Docker → Render free tier |
+| **Dashboard** | Next.js 16 · React 19 · Tailwind 4 · TypeScript → Vercel |
+| **Data** | PostgreSQL 17 on Neon · JDBC pool one side, SQL-over-HTTP the other |
+| **Clients** | Java (+ Spring Boot starter) and Node, both zero-dependency |
+| **Checks** | GitHub Actions · Testcontainers · [every suite on every push](#tests-as-they-stand) |
+
+```bash
+git clone https://github.com/YusufKosarDev/stacklight && cd stacklight
+cd backend && ./mvnw verify        # real PostgreSQL 17 via Testcontainers
+cd ../web && npm ci && npm test    # no test runner installed; see below
+```
+
+Everything below is the long version, and every number in it was measured against
+the live deployment rather than estimated. If you read one section, read
+[the architectural bet](#the-architectural-bet).
+
+---
+
+**Status: step 12** — the twelfth round of work on this, each one a branch, a
+pull request and an entry in this file. Step numbers appear throughout below;
+they are never anything more than a reference to when something was done.
+
+Events are grouped into distinct faults, counted into an
 hourly trend that outlives them, kept inside a storage budget that would
 otherwise take the project down, watched by three detectors whose relative merits
 are measured rather than assumed, delivered by clients written around a collector
@@ -892,9 +936,15 @@ enough to see.
 
 ### It ships no JavaScript of its own
 
-There are no client components — `grep -rn "use client" web/` returns nothing,
-and that is checked rather than remembered. Keeping it that way cost one small
-decision. The obvious way to mark the current nav item is `usePathname()`, which
+*Of its own* is doing real work in that heading, so here is the honest version
+before anyone opens the page source and counts: **Next.js sends its own runtime,
+and view-source shows eight script tags.** What this project adds to them is
+nothing. There are no client components — `grep -rn "use client" web/` returns
+nothing, and that is checked rather than remembered — so every interactive thing
+on these pages is a link, a `<form method="get">` or a CSS hover, and all of them
+work with scripting switched off entirely.
+
+Keeping it that way cost one small decision. The obvious way to mark the current nav item is `usePathname()`, which
 would have made this the first client component in the project. Instead each page
 names its own section: `<Shell current="groups">`. A page already knows which
 page it is, and shipping JavaScript to work that out again in the browser is
